@@ -27,4 +27,4 @@ Note: this won’t start TPFC until you reboot.
 
 ## Modernization documentation
 
-The T14 Gen 1 Intel modernization plan, hardware-verification procedure, safety model, build instructions, testing strategy, and vibe-coding workflow are documented in [`docs/README.md`](docs/README.md). Hardware control must not be enabled until the Phase 0 verification report is complete.
+The T14 Gen 1 Intel modernization plan, safety model, feature backlog, build instructions, portable safety core, testing strategy, and vibe-coding workflow are documented in [`docs/README.md`](docs/README.md). Hardware control must not be enabled until the Phase 0 verification report is complete; the new portable core does not perform EC I/O.

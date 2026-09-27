@@ -96,4 +96,20 @@ The repository contains old Debug/Release outputs and Visual Studio databases. T
 
 Curve editors, app profiles, and services increase complexity but do not establish safe EC access.
 
+## ADR-013 — Start with a portable hardware-independent core
+
+**Status:** Accepted
+
+Curve evaluation, sensor validation, capability gating, timed manual override, and safety transitions are implemented in `fancontrol/core/` without Windows, driver, EC, or administrator dependencies. The legacy Win32 application remains an integration shell until the Windows backend adapter is verified.
+
+**Consequence:** The highest-risk decision logic can be tested on a developer machine. A passing portable-core test does not prove any hardware register or driver is safe.
+
+## ADR-014 — Control activation is explicit and safety faults latch
+
+**Status:** Accepted
+
+Profile eligibility alone does not start fan control. An explicit activation request is required. BIOS/automatic requests clear the control request. Emergency and failsafe decisions remain latched until an explicit recovery/lifecycle reset and a fresh validation sequence.
+
+**Consequence:** A new build defaults to BIOS/automatic or monitor-only behavior, and a temporary temperature drop cannot silently restart control after a fault.
+
 **Consequence:** They are Phase 7 enhancements, not MVP requirements.

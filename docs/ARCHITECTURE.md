@@ -198,3 +198,26 @@ docs/
 ```
 
 The existing project can be migrated incrementally. A new build system should not be introduced solely to reorganize files; keep the Visual Studio solution as the first supported build until the core is stable.
+
+## 9. Capability and observability services
+
+The controller should expose immutable, hardware-independent status snapshots to the tray UI, CLI, telemetry writer, and diagnostic exporter. These consumers must not call the EC or backend directly.
+
+The snapshot should include:
+
+- hardware/profile/backend capability states;
+- safety and control state;
+- valid sensor readings with source and age;
+- requested fan command and measured RPM;
+- fan-health result;
+- power source and active policy;
+- manual-override expiry;
+- last command result and safety event.
+
+Use [OBSERVABILITY.md](OBSERVABILITY.md) for the event and redaction contract.
+
+## 10. Migration boundary for the first implementation
+
+The first code increment is a portable core library containing curve validation/evaluation, sensor validity, manual-override expiry, and safety-state transitions. It must compile and test without Windows headers, drivers, an EC, or administrator privileges.
+
+The legacy `FANCONTROL` class remains the integration shell until the Windows adapter and fake backend are ready. No new core code may call `WriteByteToEC`, select a fan channel, or activate an unverified profile.

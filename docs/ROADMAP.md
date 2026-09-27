@@ -1,6 +1,6 @@
 # Modernization roadmap
 
-**Status:** Draft ready for Phase 0
+**Status:** Phase 0 hardware gate remains open; portable core foundation implemented
 **Target release:** TPFanControl T14 Gen 1 Intel MVP
 **Owner:** Project maintainer
 **Rule:** A phase is not complete because the code compiles; it is complete only when its evidence and exit criteria are recorded.
@@ -12,7 +12,7 @@ Use an incremental migration rather than a large rewrite. The current repository
 ```text
 Phase 0  Identify laptop and EC behavior
     |
-Phase 1  Clean build + backend feasibility
+Phase 1  Portable safety core + clean build + backend feasibility
     |
 Phase 2  Hardware abstraction + EC protocol
     |
@@ -20,7 +20,7 @@ Phase 3  T14 single-fan controller + temperature providers
     |
 Phase 4  Safety state machine + profile validation
     |
-Phase 5  Minimal UI, startup, and logging
+Phase 5  UI, startup, observability, diagnostics, and logging
     |
 Phase 6  Hardware qualification + release
     |
@@ -64,6 +64,7 @@ Build the source cleanly and determine whether low-level access is possible with
 - Clean VS2022 build from source
 - v143/Windows SDK project migration
 - `Debug|Win32`, `Release|Win32`, `Debug|x64`, and `Release|x64` configurations as applicable
+- Portable curve/sensor/safety core with fake-clock tests
 - `IIoBackend` interface
 - Existing TVicPort adapter for compatibility testing
 - Backend feasibility report for PawnIO
@@ -162,7 +163,10 @@ Expose the stable controller through the existing application without changing t
 
 - Existing tray/dialog UI updated with backend and safety status
 - Explicit return-to-BIOS action
-- Rotating logs and CSV telemetry
+- Status snapshot shared by UI, CLI, telemetry, and diagnostics
+- Rotating logs and bounded CSV telemetry
+- Sanitized diagnostic export
+- Read-only status/profile-validation CLI
 - Per-user delayed Task Scheduler startup with elevation
 - Explorer restart/tray recovery
 - DPI-safe pointer and window handling
@@ -202,7 +206,9 @@ Only begin after Phase 6:
 - AC/battery profile switching
 - Multiple named profiles
 - Graphical curve editor
-- Foreground-application profiles
+- Foreground-application profiles with an explicit allowlist
+- Thermal trend and acoustic optimization
+- Optional read-only local API
 - Separate service and tray processes
 - Additional ThinkPad models
 - Additional backends
@@ -214,6 +220,7 @@ Only begin after Phase 6:
 | M0 Exact hardware identified | Not started | Hardware report |
 | M1 Clean source build | Not started | Build log |
 | M2 Backend feasibility | Not started | Backend report |
+| M2.5 Portable safety/observability core | In progress | Portable-core test results |
 | M3 Typed EC layer | Not started | Unit/fake-backend tests |
 | M4 T14 manual control | Not started | Hardware test report |
 | M5 Safe smart mode | Not started | Safety and curve tests |

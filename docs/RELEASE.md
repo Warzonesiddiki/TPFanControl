@@ -44,6 +44,8 @@ TPFanControl-<version>-win-x64/
     BUILD.md
     TROUBLESHOOTING.md
     SAFETY.md
+    USER_GUIDE.md
+    COMPATIBILITY.md
 ```
 
 Do not include private user logs, `.pdb` files, `.obj` files, Visual Studio databases, or developer-specific paths.
@@ -125,6 +127,9 @@ ProfileRevision=2
 - [ ] Unsupported backend gives an actionable message.
 - [ ] Monitor-only mode is obvious.
 - [ ] Return-to-BIOS action is available.
+- [ ] Monitor-only status is obvious.
+- [ ] Diagnostic export is redacted and bounded.
+- [ ] Manual override expiry is visible and tested.
 - [ ] Uninstall instructions are tested.
 - [ ] Rollback instructions are tested.
 

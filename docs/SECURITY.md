@@ -67,7 +67,15 @@ A future updater must verify package integrity before replacing the executable. 
 
 Rollback must restore the application and profile, not write undocumented EC values.
 
-## 7. Review triggers
+## 7. Feature-specific security controls
+
+- Workload/application profiles must use an explicit allowlist and disclose which process names are inspected.
+- Diagnostic bundles must be generated from an allowlist and redact serials, usernames, credentials, and private paths.
+- A future local API must be disabled by default, user-scoped, authenticated, and read-only unless a separate security review approves otherwise.
+- Notifications and telemetry must not transmit data off the machine by default.
+- Profile import must validate schema, ranges, topology, and verification status before saving or activation.
+
+## 8. Review triggers
 
 Require additional security review for:
 
@@ -78,4 +86,7 @@ Require additional security review for:
 - automatic driver installation;
 - installer changes;
 - remote or network control;
-- changes that disable or bypass Windows security.
+- changes that disable or bypass Windows security;
+- workload/process monitoring or a local API;
+- diagnostic archive/export handling;
+- profile import/export or update logic.

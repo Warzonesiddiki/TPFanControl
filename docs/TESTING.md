@@ -54,7 +54,22 @@ Prove that every failure path:
 - enters monitor-only/failsafe;
 - releases resources.
 
-## 3. Static and build checks
+## 3. Portable-core and feature tests
+
+The first portable core is implemented under `fancontrol/core/` and exercised by `tests/core_tests.cpp`. The hardware-independent core must be testable on a developer machine without Windows headers or a low-level driver. Cover:
+
+- curve validation and boundary evaluation;
+- hysteresis and dwell timing with an injected clock;
+- sensor range, freshness, sentinel, and source-validity checks;
+- manual override expiry and cancellation;
+- safety-state transitions;
+- fan-health states when RPM is supported or unavailable;
+- capability reports that fail closed;
+- diagnostic redaction and bounded telemetry behavior.
+
+No portable-core test may issue a real port I/O operation.
+
+## 4. Static and build checks
 
 Every change should run:
 
@@ -67,7 +82,7 @@ git diff --check
 
 New warnings are defects unless explicitly documented and accepted.
 
-## 4. Hardware test prerequisites
+## 5. Hardware test prerequisites
 
 Before writing to the EC:
 
@@ -81,7 +96,7 @@ Before writing to the EC:
 
 Use [templates/TEST_REPORT.md](templates/TEST_REPORT.md) for every test session.
 
-## 5. Physical test matrix
+## 6. Physical test matrix
 
 | ID | Test | Expected result | Evidence |
 |---|---|---|---|
@@ -106,7 +121,7 @@ Use [templates/TEST_REPORT.md](templates/TEST_REPORT.md) for every test session.
 | H-19 | HVCI enabled | Backend result documented | Environment report |
 | H-20 | HVCI/backend blocked | Monitor-only fallback | Log |
 
-## 6. Fault-injection requirements
+## 7. Fault-injection requirements
 
 Hardware should not be required to test these cases. The fake backend must allow deterministic injection of:
 
@@ -120,7 +135,7 @@ Hardware should not be required to test these cases. The fake backend must allow
 - mutex contention;
 - backend shutdown during a command.
 
-## 7. Evidence retention
+## 8. Evidence retention
 
 For each release candidate retain:
 
@@ -136,6 +151,6 @@ reports/
 
 Do not commit raw serial numbers, personal paths, or private system information.
 
-## 8. Test completion rule
+## 9. Test completion rule
 
 A test passes only when the expected result and evidence are both present. “It seemed to work” is not a reproducible result.

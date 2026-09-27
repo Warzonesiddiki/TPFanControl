@@ -10,26 +10,21 @@ The existing source imports TVicPort. The target Windows security configuration,
 
 All backends implement the same contract:
 
-```cpp
-struct BackendCapabilities {
-    bool portIo;
-    bool msrRead;
-    bool msrWrite;
-    bool signedPackage;
-    bool supportsCurrentProcessArchitecture;
-};
+The first portable contract is implemented in [`fancontrol/core/io_backend.h`](../fancontrol/core/io_backend.h):
 
+```cpp
 class IIoBackend {
 public:
     virtual ~IIoBackend() = default;
-    virtual bool initialize(std::string& error) = 0;
-    virtual void shutdown() noexcept = 0;
-    virtual BackendCapabilities capabilities() const noexcept = 0;
-    virtual bool readPort8(uint16_t port, uint8_t& value, IoError& error) = 0;
-    virtual bool writePort8(uint16_t port, uint8_t value, IoError& error) = 0;
-    virtual bool readMsr(uint32_t msr, uint64_t& value, IoError& error) = 0;
+    virtual BackendState state() const noexcept = 0;
+    virtual BackendCapabilities capabilities() const = 0;
+    virtual IoResult readPort(uint16_t port) = 0;
+    virtual IoResult writePort(uint16_t port, uint8_t value) = 0;
+    virtual void close() noexcept = 0;
 };
 ```
+
+`IoResult` carries a success flag, a typed error, an optional byte value, and a diagnostic message. The portable interface intentionally does not know about EC offsets, fan levels, profiles, or curves. MSR access can be added as a separately reviewed capability; it is not assumed by this first contract.
 
 The exact public method names can change, but the interface must provide bounded failure reporting. No controller code should depend on TVicPort, PawnIO, or another backend directly.
 

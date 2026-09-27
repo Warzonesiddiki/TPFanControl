@@ -2,7 +2,7 @@
 
 **Project:** TPFanControl
 **Target:** ThinkPad T14 Gen 1 Intel; Windows version and build not yet supplied
-**Documentation status:** Planning complete; hardware verification is still required
+**Documentation status:** Feature plan expanded; portable core foundation started; hardware verification is still required
 **Last reviewed:** 2026-09-27
 
 ## Purpose
@@ -39,6 +39,12 @@ The exact machine type, CPU, BIOS revision, graphics configuration, EC port mapp
 |---|---|
 | [ROADMAP.md](ROADMAP.md) | Ordered milestones, gates, deliverables, and stop conditions |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Target design and migration strategy |
+| [FEATURE_BACKLOG.md](FEATURE_BACKLOG.md) | Prioritized useful capabilities and deferred features |
+| [CONTROL_ALGORITHM.md](CONTROL_ALGORITHM.md) | Curves, hysteresis, dwell, ramping, and manual control |
+| [OBSERVABILITY.md](OBSERVABILITY.md) | Status, telemetry, logs, graphs, fan health, and diagnostics |
+| [CLI_DIAGNOSTICS.md](CLI_DIAGNOSTICS.md) | Read-only command-line and diagnostic contracts |
+| [USER_GUIDE.md](USER_GUIDE.md) | Intended user experience and recovery |
+| [COMPATIBILITY.md](COMPATIBILITY.md) | Capability states and support matrix |
 | [HARDWARE_VERIFICATION.md](HARDWARE_VERIFICATION.md) | Laptop identification and Phase 0 evidence |
 | [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) | Candidate EC addresses and verification status |
 | [DRIVER_BACKENDS.md](DRIVER_BACKENDS.md) | TVicPort, PawnIO, capability checks, and dependency policy |

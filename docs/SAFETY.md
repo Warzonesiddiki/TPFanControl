@@ -93,7 +93,7 @@ Failsafe behavior:
 5. notify the user if verification fails;
 6. remain in monitor-only mode.
 
-Do not automatically return from failsafe until readings are valid for a configured cooldown period. A later version may require explicit user acknowledgement.
+Do not automatically return from failsafe until readings are valid for a configured cooldown period. The portable controller additionally latches emergency/failsafe decisions so that a temporary temperature drop cannot silently re-enable control. A future recovery flow may require explicit user acknowledgement and a fresh startup-validation sequence.
 
 ## 7. Manual mode restrictions
 
@@ -105,7 +105,17 @@ The normal UI should expose only verified normal levels. The following rules app
 - a manual command is not accepted when the temperature provider is invalid;
 - manual mode automatically yields to the failsafe state.
 
-## 8. Crash and power-loss limitation
+## 8. Manual override, fan health, and power policies
+
+A manual override is temporary and must include an expiry. It is cancelled by invalid/stale required sensor data, backend failure, readback mismatch, application restart, or an emergency state. The UI must show the remaining time and provide an immediate Return to BIOS/automatic action.
+
+Fan-health detection is meaningful only when the selected profile verifies a tachometer. It must distinguish unsupported RPM from a non-responsive fan and must not issue repeated blind writes after a suspect result.
+
+AC/battery or workload policies select among already validated profiles; they do not grant new hardware permissions. A policy change is logged and must retain the current safety state until the replacement policy passes validation.
+
+See [CONTROL_ALGORITHM.md](CONTROL_ALGORITHM.md) for deterministic curve, hysteresis, dwell, ramp, and health behavior.
+
+## 9. Crash and power-loss limitation
 
 A user-mode process cannot guarantee restoration after a kernel crash, forced power loss, or hardware reset. The project must state this clearly.
 
@@ -118,7 +128,7 @@ Possible future mitigations:
 
 None of these may be claimed as protection until tested on the target hardware.
 
-## 9. Sensor validity
+## 10. Sensor validity
 
 A temperature reading is valid only if:
 
@@ -131,7 +141,7 @@ A temperature reading is valid only if:
 
 Sensor offsets must not be used to hide a failed sensor.
 
-## 10. Logging safety events
+## 11. Logging safety events
 
 Log at least:
 
@@ -145,7 +155,7 @@ Log at least:
 
 Do not log serial numbers, user names, or other unrelated personal data by default.
 
-## 11. Safety review checklist
+## 12. Safety review checklist
 
 Before merging a hardware-control change:
 

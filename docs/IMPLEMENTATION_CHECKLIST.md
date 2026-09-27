@@ -34,8 +34,11 @@ Legend:
 - [ ] Fix baseline compiler errors and warnings.
 - [ ] Add/configure x64 build.
 - [ ] Audit pointer-sized Win32 APIs.
-- [ ] Define `IIoBackend`.
-- [ ] Add fake backend.
+- [x] Define `IIoBackend`.
+- [x] Add portable curve/sensor/safety core.
+- [x] Add deterministic timestamp inputs and a fake backend test seam.
+- [x] Add capability/status snapshot model.
+- [x] Add fake backend test implementation.
 - [ ] Add TVicPort adapter for baseline comparison.
 - [ ] Perform PawnIO feasibility spike.
 - [ ] Record backend signature/HVCI result.
@@ -70,13 +73,17 @@ Legend:
 
 ## Phase 4 — safety and profiles
 
-- [ ] Add explicit hysteresis.
-- [ ] Add dwell time.
-- [ ] Add startup validation state.
-- [ ] Add failsafe BIOS state.
-- [ ] Add high-temperature override.
-- [ ] Add invalid/stale sensor handling.
-- [ ] Add configuration validation.
+- [x] Add explicit hysteresis.
+- [x] Add dwell time.
+- [ ] Add ramp limiting.
+- [x] Add startup validation state.
+- [x] Add time-limited manual override.
+- [ ] Add AC/battery policy selection.
+- [x] Add fan-health states with unsupported-RPM handling.
+- [x] Add failsafe BIOS state.
+- [x] Add high-temperature override.
+- [x] Add invalid/stale sensor handling.
+- [x] Add curve/configuration validation foundation.
 - [ ] Add legacy dual-fan profile isolation.
 - [ ] Complete fake-backend safety tests.
 - [ ] Complete high-temperature/failure hardware tests.
@@ -86,6 +93,10 @@ Legend:
 - [ ] Display backend status.
 - [ ] Display sensor source and freshness.
 - [ ] Display safety/failsafe state.
+- [ ] Display requested command versus measured RPM.
+- [ ] Add bounded status/event telemetry.
+- [ ] Add sanitized diagnostic export.
+- [ ] Add read-only CLI status/profile validation.
 - [ ] Add explicit return-to-BIOS action.
 - [ ] Fix x64 window pointer APIs.
 - [ ] Add rotating logs.
@@ -112,7 +123,10 @@ Legend:
 - [ ] Named profiles.
 - [ ] AC/battery switching.
 - [ ] Curve editor.
-- [ ] Foreground-app triggers.
+- [ ] Foreground-app triggers with allowlist.
+- [ ] Acoustic optimization.
+- [ ] Thermal trend warnings.
+- [ ] Read-only local status API.
 - [ ] Separate service/tray processes.
 - [ ] Additional ThinkPad profiles.
 - [ ] Additional approved backends.

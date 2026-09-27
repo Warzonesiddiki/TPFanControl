@@ -68,6 +68,23 @@ Point4=82,4,77
 Point5=88,7,83
 Point6=92,BIOS,88
 
+[ManualOverride]
+Enabled=0
+DurationSeconds=900
+MaximumLevel=7
+CancelOnInvalidSensor=1
+CancelOnBackendError=1
+
+[PowerPolicies]
+AcProfile=Balanced
+BatteryProfile=BatterySaver
+
+[Observability]
+LogEnabled=1
+CsvEnabled=0
+TelemetryRetentionMinutes=120
+DiagnosticVerbose=0
+
 [Sensors]
 UseEcSensors=1
 UseCpuDts=0
