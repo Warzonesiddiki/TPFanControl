@@ -217,5 +217,5 @@ Only begin after Phase 6:
 | M3 Typed EC layer | Not started | Unit/fake-backend tests |
 | M4 T14 manual control | Not started | Hardware test report |
 | M5 Safe smart mode | Not started | Safety and curve tests |
-| M6 Windows 11 MVP release | Not started | Release checklist |
+| M6 Windows MVP release | Not started | Release checklist |
 | M7 Optional UX features | Not started | Feature-specific evidence |

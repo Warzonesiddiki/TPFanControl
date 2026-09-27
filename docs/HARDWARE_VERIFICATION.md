@@ -1,7 +1,7 @@
 # Phase 0 — hardware verification
 
 **Status:** Not started
-**Target:** ThinkPad T14 Gen 1 Intel on Windows 11 x64
+**Target:** ThinkPad T14 Gen 1 Intel; Windows version and build not yet supplied
 **Safety level:** Read-only until the controlled-write checklist is explicitly approved
 
 ## 1. Why this phase exists

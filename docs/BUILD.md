@@ -2,9 +2,9 @@
 
 ## 1. Supported development environment
 
-Primary target:
+Recommended validation environment (the actual target Windows version is still unknown):
 
-- Windows 11 x64
+- Windows 10 or Windows 11 x64, with the exact edition and build recorded in the hardware report
 - Visual Studio 2022 Community or later
 - Desktop development with C++ workload
 - Windows 10/11 SDK
@@ -68,7 +68,7 @@ Debug|x64
 Release|x64
 ```
 
-The x64 configuration is the primary Windows 11 build. Win32 remains only while the selected backend and tests prove that it is supported.
+The x64 configuration is the primary build. Win32 remains only while the selected backend and tests prove that it is supported. The target Windows edition and build must be recorded before release.
 
 Example future command:
 

@@ -1,7 +1,7 @@
 # TPFanControl modernization documentation
 
 **Project:** TPFanControl
-**Target:** ThinkPad T14 Gen 1 Intel on Windows 11 x64
+**Target:** ThinkPad T14 Gen 1 Intel; Windows version and build not yet supplied
 **Documentation status:** Planning complete; hardware verification is still required
 **Last reviewed:** 2026-09-27
 

@@ -89,7 +89,7 @@ Do not disable Secure Boot, HVCI, or the vulnerable-driver blocklist as part of 
 
 ## 6. x64 and Win32 policy
 
-x64 is the primary target for Windows 11 development because it avoids pointer-size limitations and matches modern driver tooling. A Win32 build may be retained only if the selected backend supports it and it passes the same safety tests.
+x64 is the primary target because it avoids pointer-size limitations and matches modern driver tooling. The target Windows edition and build are not yet supplied and must be recorded during Phase 0. A Win32 build may be retained only if the selected backend supports it and it passes the same safety tests.
 
 Do not advertise Win32 compatibility merely because the source compiles. Record a matrix:
 
