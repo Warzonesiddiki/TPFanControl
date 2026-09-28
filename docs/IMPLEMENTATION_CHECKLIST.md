@@ -21,8 +21,8 @@ Legend:
 | Measure | Value |
 |---|---|
 | Documented safety gaps closed | 6 of 10 (gaps 1, 2, 3, 4, 5, 8) |
-| Portable-core test functions | 11 core + 42 EC + 31 bridge + 20 policy + 16 backend = 120, plus a self-test for every static checker |
-| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5 6 of 11: 05, 06, 07, 08, 10 complete; 04 in progress; 02 blocked |
+| Portable-core test functions | 11 core + 42 EC + 31 bridge + 29 ecdiag + 20 policy + 16 backend = 149, plus a self-test for the three checkers that could otherwise stop matching silently (`check_ecdiag_readonly.py`, `check_project_sources.py`, `check_ci_steps.py`) |
+| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5: 05, 06, 07, 08, 09, 10 complete, 04 in progress, 02 blocked, 01/03/11 not started |
 | Critical path | T0 → T1 → T5 → T3 → T4 → T6 → T8 |
 | Biggest single risk | The portable core is not connected to the application. It is compiled by the project and tested, but no legacy file includes a core header, so the safety state machine is dead code that can drift from shipped behaviour indefinitely without any signal. |
 
@@ -62,7 +62,7 @@ until Phase 0 completes.
 | T1-08 | Add CI: run `tests/run_core_tests.sh` on Linux, macOS, and Windows | `[-]` | `ci/ci.yml` job `portable-tests`, matrix `ubuntu`/`macos`/`windows`, plus an ASan+UBSan leg. Workflow YAML validated; script runs locally. Awaiting a green run, and awaiting the workflow being enabled. **Not verified.** |
 | T1-09 | Add CI: Release build with warnings-as-errors on the core | `[-]` | Job `release-warnings-as-errors` builds both test projects Release x64 and runs them, then asserts `/W4 /WX /permissive- /EHsc` actually reached every core unit. Awaiting a green run, and awaiting the workflow being enabled. **Not verified.** |
 | T1-10 | Add CI: `git diff --check` and a link check | `[-]` | Job `hygiene` runs `git diff --check`, `scripts/check_links.py`, a no-tracked-artifacts check, and a UTF-8 check. The link checker was negative-tested (3 seeded defects, all caught) and passes locally. Awaiting a green run, and awaiting the workflow being enabled. **Not verified.** |
-| T1-11 | Add a Windows test target so the suite runs on Windows | `[-]` | `tests/core_tests.vcxproj` and `tests/ec_protocol_tests.vcxproj` build the same sources as `run_core_tests.sh`, 4 configurations each, `/W4` `/WX`, both in the solution. XML validated. Awaiting execution in CI. **Not verified.** |
+| T1-11 | Add a Windows test target so the suite runs on Windows | `[-]` | Seven portable projects — `tests/*.vcxproj` and `tools/ecdiag/ecdiag.vcxproj` — build the same sources as `run_core_tests.sh`, four configurations each, `/W4` `/WX` `/permissive-` `/EHsc`, all registered in `fancontrol/fancontrol.sln`; the application project gained `core\ec_access.cpp`. `scripts/check_project_sources.py` compiles each project's **own** `<ClCompile>` list and runs the result; its first run found four projects that could not link and a duplicated source item, and `check_projects.py` now also fails a project whose `OutputFile` is not its own. XML validated; `check_projects.py` clean. Awaiting execution in CI. **Not verified.** |
 | T1-12 | Add static analysis to CI (clang-tidy or MSVC `/analyze`) | `[-]` | Job `static-analysis` runs MSVC `/analyze` on the core (enforced) and the app (reported, `continue-on-error` pending T1-05), and archives a summary. Awaiting a green run, and awaiting the workflow being enabled. **Not verified.** |
 
 **CI enablement blocker.** The workflow is version-controlled at
@@ -170,7 +170,7 @@ would imply a capability the project does not have.
 | T5-06 | Fake-backend fault injection: one failed read, repeated failed reads, one failed write, wrong readback, mutex contention, backend shutdown mid-command ([TESTING.md](TESTING.md) §7) | `[x]` | `tests/fake_ec.{h,cpp}`. Transient vs. persistent failures are modelled separately (`testTransientFailureIsRetried`, `testPersistentFailureIsRetriedOnlyToTheLimit`); a backend that passes the capability probe and then denies the write is a distinct mode (`testAccessDeniedIsNotRetried`), because otherwise `AccessDenied` is unreachable. Shutdown mid-transaction is `testBackendStoppingMidTransactionIsReported`. The contention tests run 4 reader threads plus a concurrent writer, and the fake rejects any interleaved data-port read; verified clean under ThreadSanitizer. |
 | T5-07 | Stuck temperature and stale timestamp fault injection | `[x]` | `testStuckTemperatureSource` models a source whose value freezes while its timestamps keep advancing, so a freshness check cannot catch it. **Documented limitation, asserted rather than glossed over:** a uniformly stuck sensor set is not detectable from a single reading stream. What the tests do pin is the invariant that does hold — a stuck source can neither mask a hotter source nor hold the aggregate down, because the aggregate is a maximum over sources. `testStaleAndFutureTimestampsAreRejected` checks the age and skew limits on **both** sides of each boundary, since an off-by-one boundary is an untested boundary. |
 | T5-08 | Impossible RPM fault injection | `[x]` | Fixed a real defect: `evaluateFanHealth` reported **Healthy** for 65535 RPM — the one answer that must never be reported for a value that cannot be a measurement. Added `validateFanRpm` (`FanRpmPolicy`, `ValidatedFanRpm`) with plausibility bounds, sentinel handling (`0xFFFF`, `0x8000`; **0 excluded** so a stopped fan stays distinguishable), and freshness; `ControllerInput::timestampMs` carries when the reading was taken. `testImplausibleRpmIsNotReportedHealthy` pins all five rejection classes and then asserts a plausible reading still returns `Healthy`, so the fix is not just "report `Failed` for everything". |
-| T5-09 | Read-only `ecdiag` tool | `[ ]` | Not started. Depends on a backend; the EC layer it would use is now available. |
+| T5-09 | Read-only `ecdiag` tool | `[x]` | `fancontrol/core/ecdiag.{h,cpp}` (portable engine), `tools/ecdiag/{main.cpp,simulated_ec.{h,cpp}}` (front end and an invented-table reader), `tests/ecdiag_tests.cpp` (**29 tests**), [ECDIAG.md](ECDIAG.md). Read-only is structural, not a promise: `ecdiag` is handed `core::IRegisterReader` (one read operation, no write member) and its include closure cannot reach `EcBus` — enforced by `scripts/check_ecdiag_readonly.py` and its 13-case self-test — and a complete run through a **real `EcBus`** over the fake EC is asserted against the bus's own write trace and the fake's committed-write log (`testFullRunThroughARealBusWritesNoRegister`, `testReadOnlyInvariantFiresWhenARealWriteReachesTheBus`). Modes `--plan` (no I/O at all) and `--simulate`; JSON schema `tpfancontrol.ecdiag/1` with an evidence grade (`plan-only`/`simulated`/`hardware`) and an explicit `not_evidence_reason`, because a report that could pass a simulated run off as a measurement would be worse than no report. Exit codes 0/2/3/4/6/8 with 5 and 7 unreachable by construction. Ports print as 16-bit hex (`0x1604`, never `0x04`). `tools/ecdiag/ecdiag.vcxproj` builds it on Windows. **No live backend exists**: every `--backend` name exits 4 with the reason (T5-01, T5-02), so the tool has never read a machine, and nothing here claims otherwise. |
 | T5-10 | Prove the single-fan path never writes `0x31` | `[x]` | `EcBus::writeRegister` refuses `0x31` **before touching any port** (`testFanSelectorWriteIsRefusedBeforeAnyBackendCall` asserts `backend.operationCount() == 0`, not merely that the call returned an error). The refusal is checked against **all 256** values, because a rule that only catches the value the code happens to use is not a rule. `setFanSelectorWritesAllowed` is **never called anywhere in product code** — verified by grep over `*.cpp`/`*.h` excluding `tests/`, which finds only the declaration and the definition. Assertions are made against the bus's own write trace and the fake's committed-write log, never against intent. |
 | T5-11 | Dependency record per [SECURITY.md](SECURITY.md) §3: source, license, version, signature, architecture, uninstall, redistribution | `[ ]` | Not started. |
 
@@ -210,24 +210,55 @@ Found by the tests, not by reading the code:
   assumed: the same failing condition aborts under `-DNDEBUG` with `CHECK` and exits 0
   with `assert`.
 
-The last two items are the reason the fake records *committed* writes separately from
-*attempted* ones. A log that records the attempt as the outcome would have made all four
-of these look like passing tests.
+Found while building the diagnostic and its Windows targets, not by running the
+suites — this is the class of defect the suites structurally cannot see:
+
+- **The extracted EC configuration was not in the Windows projects.** Splitting
+  `ec_access.{h,cpp}` out of `ec_protocol.h` (ADR-024) gave four of the five test
+  projects an undefined reference the moment `EcBus` validated a configuration.
+  The Linux runner compiles every core source for every suite, so nothing here
+  noticed; only `scripts/check_project_sources.py`, which compiles a project's own
+  `<ClCompile>` list, did. `legacy_backend_tests.vcxproj` was additionally missing
+  `fake_ec.cpp` — and so had never compiled the bus it exercises — while
+  `app_bridge_tests.vcxproj` listed `core_types.cpp` twice.
+- **Every test project wrote `core_tests.exe`.** All five were cloned from the
+  same template and the linker output name came with it, so the four executables
+  the workflow runs from `out\tests\<platform>\<configuration>\<suite>.exe` did
+  not exist, and whichever project linked last would have overwritten the others.
+  A job that runs `core_tests.exe` five times and passes is a job that ran one
+  suite and reported success for six. The names are now per-project, and
+  `check_projects.py` fails any project whose `OutputFile` is not recognisably its
+  own — a rule validated by putting `core_tests.exe` back into one project and
+  watching it fail, then restoring the file from the bytes read beforehand.
+- **The tool reported ports as bytes.** `hexByte(port & 0xFF)` printed the
+  configured status port `0x1604` as `0x04`. Every port in this project is 16
+  bits, so the truncation would have made the report's own configuration block
+  wrong — in the one artifact meant to be quoted as evidence. Ports now go
+  through `hexWord`, and the tests assert the full value.
+- **A plan-only report looked empty rather than explicitly unread.** The engine
+  performs no I/O in plan-only mode, so the results table was rendered from an
+  empty result set and the report was indistinguishable from one whose reads had
+  found nothing. The table is now driven by the plan, with `not read` in the
+  value cells, and `PlanOnly` is a distinct outcome from `Ok`.
+
+The last two items of the earlier list are the reason the fake records *committed*
+writes separately from *attempted* ones. A log that records the attempt as the
+outcome would have made all four of those look like passing tests.
 
 ### Verification actually performed
 
 Run locally on Linux with g++ (no MSBuild, Visual Studio or Windows in this
 environment). Every cell below was executed, not inferred:
 
-| Configuration | `core_tests` | `ec_protocol_tests` | `app_bridge_tests` | `legacy_policy_tests` | `legacy_backend_tests` | Total |
-|---|---|---|---|---|---|---|
-| `-Wall -Wextra -Werror -pedantic` | 11 | 42 | 31 | 20 | 16 | **120** |
-| `-O2 -DNDEBUG` | 11 | 42 | 31 | 20 | 16 | **120** |
-| `-fsanitize=address,undefined` | 11 | 42 | 31 | 20 | 16 | **120** |
-| `-fsanitize=thread` | 11 | 42 | 31 | 20 | 16 | **120** |
+| Configuration | `core_tests` | `ec_protocol_tests` | `app_bridge_tests` | `ecdiag_tests` | `legacy_policy_tests` | `legacy_backend_tests` | Total |
+|---|---|---|---|---|---|---|---|
+| `-Wall -Wextra -Werror -pedantic` | 11 | 42 | 31 | 29 | 20 | 16 | **149** |
+| `-O2 -DNDEBUG` | 11 | 42 | 31 | 29 | 20 | 16 | **149** |
+| `-fsanitize=address,undefined` | 11 | 42 | 31 | 29 | 20 | 16 | **149** |
+| `-fsanitize=thread` | 11 | 42 | 31 | 29 | 20 | 16 | **149** |
 
 `core_tests` reports no count: it is the original suite and was not renumbered
-when the others were added. The other four print their own count and fail if it is
+when the others were added. The other five print their own count and fail if it is
 wrong.
 
 The `-DNDEBUG` row is not redundant. Release defines `NDEBUG`, which compiles
@@ -235,21 +266,24 @@ The `-DNDEBUG` row is not redundant. Release defines `NDEBUG`, which compiles
 Release and still exits 0. `tests/test_check.h` exists because that failure is
 invisible, and running the row is how it is ruled out rather than assumed.
 
-Four static checkers run alongside the suites, and each has been shown to fail on
-a tree that violates it:
+The static checks below run alongside the suites, and each has been shown to fail
+on a tree that violates it:
 
 | Checker | What it catches | Proven by |
 |---|---|---|
-| `check_projects.py` | A `Project(` with no `EndProject`, a missing project file, a `vcxproj` listing a source that is not on disk, a project unmapped into one of the four configurations | run against the previous broken solution |
+| `check_projects.py` | A `Project(` with no `EndProject`, a missing project file, a `vcxproj` listing a source that is not on disk, a project unmapped into one of the four configurations, and a project whose `OutputFile` is not its own — which is how five projects came to write `core_tests.exe` | run against the previous broken solution; the output-name rule demonstrated by reintroducing the defect into `legacy_policy_tests.vcxproj` |
 | `check_legacy_ec.py` | A write to the fan-selector register, or a fan-level write from outside the core, anywhere in the legacy sources | both defects reintroduced into `fanstuff.cpp`; each reported once, by the correct rule |
 | `check_legacy_ec_selftest.py` | The guard above having silently stopped matching — 17 cases, half of which must not match | found a `0x2F`/`0x2f` gap, a prefix bug, and a rule that could not fire at all |
+| `check_ecdiag_readonly.py` | The diagnostic reaching a write: an `#include` that opens the closure to `EcBus`, a write API or write-enabling call in the tool's own sources, or the runtime trace assertions having been deleted. 13-case self-test | validated by adding `#include "ec_protocol.h"` to `ecdiag.h` on purpose; the guard failed with the right rule and the file was restored from bytes read beforehand |
+| `check_project_sources.py` | A Windows project whose own `<ClCompile>` list is incomplete, will not compile, or names a file that is not there. 5-case self-test | its first run against the tree as it stood found four projects unable to link, and the missing-source case is one of its own self-test cases |
 | `check_links.py` | A relative link or anchor in the documentation that does not resolve | run against the previous tree |
 | `check_ci_steps.py` | The portable steps of `ci/ci.yml` no longer working — it executes them locally | caught a suite that stopped linking because its fake source was wrong |
 
-`tests/run_core_tests.sh` builds and runs all five suites and is the single entry
-point used by CI. The Windows build (six projects, four configurations, `/W4 /WX`,
-MSVC `/analyze`) is **not** verified here — no Windows toolchain exists in this
-environment — and is recorded as awaiting CI evidence rather than as done.
+`tests/run_core_tests.sh` builds and runs all six suites, and builds and
+smoke-tests the `ecdiag` tool, and is the single entry point used by CI. The
+Windows build (eight projects, four configurations, `/W4 /WX`, MSVC `/analyze`)
+is **not** verified here — no Windows toolchain exists in this environment — and
+is recorded as awaiting CI evidence rather than as done.
 
 ### T5 limitations, stated rather than papered over
 
@@ -275,6 +309,16 @@ environment — and is recorded as awaiting CI evidence rather than as done.
 - The `EcBus` mutex is the portable equivalent of the EC access mutex in
   [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §5 step 1. It does **not** serialise against
   the legacy application's own thread — that is T3-06.
+- **`ecdiag` has never read a machine.** There is no live backend, so every
+  `--backend` name exits 4 and the only runs that exist are `--plan` (no I/O) and
+  `--simulate` (an invented table). Its read-only guarantee is structural and is
+  exercised against a real `EcBus` over a fake EC; it has not been exercised
+  against hardware, and a hardware report cannot be produced by this tool until
+  T5-01 or T5-02 lands. See [ECDIAG.md](ECDIAG.md) §7.
+- A value read from an offset does not establish that the offset means what its
+  candidate label says. `ecdiag` records raw bytes and refuses to summarise them
+  into a temperature, an RPM or a fan state; correlation stays a human step
+  ([HARDWARE_VERIFICATION.md](HARDWARE_VERIFICATION.md) §7).
 
 ---
 
@@ -309,7 +353,7 @@ environment — and is recorded as awaiting CI evidence rather than as done.
 | T7-08 | Add rotating logs that never enter the source tree | `[ ]` | [BUILD.md](BUILD.md) §7 |
 | T7-09 | Add bounded CSV telemetry | `[ ]` | |
 | T7-10 | Add a sanitised diagnostic export | `[ ]` | Must redact paths and serials |
-| T7-11 | Add a read-only CLI for status and profile validation | `[ ]` | T5-09 |
+| T7-11 | Add a read-only CLI for status and profile validation | `[ ]` | Depends on T5-09 (complete): the portable read-only tool exists, but this is the in-application command surface from [CLI_DIAGNOSTICS.md](CLI_DIAGNOSTICS.md) §1, plus the profile validator. |
 | T7-12 | Add per-user delayed Task Scheduler startup | `[ ]` | ADR-009: not as SYSTEM |
 | T7-13 | Show a monitor-only banner when control is not active | `[ ]` | ADR-007 |
 | T7-14 | Make the UI honest about unverified state at all times | `[ ]` | Definition of a safety requirement |

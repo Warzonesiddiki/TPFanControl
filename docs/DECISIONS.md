@@ -583,3 +583,85 @@ establishes the first. The second still does not exist (ADR-021).
 **Revisit conditions.** Never for the deny-by-default direction. If a future
 need requires register writes on a machine that has not been verified, that need
 is a safety defect, not a feature.
+
+## ADR-024 — The read-only diagnostic is read-only by construction
+
+**Status.** Accepted, T5-09.
+
+**Context.** `ecdiag` is the tool that will collect Phase 0's read-only EC
+evidence (T4-07 … T4-12). Its whole value is that it cannot write. `EC_REGISTER_MAP.md`
+§10 records how the previous application already failed exactly this test: the
+fan-selector write sat in `SetFan()` for years, four writes per attempt, without
+anyone having decided to put it there. A rule that a diagnostic must not write is
+therefore in the same category as a comment saying "do not write to register X":
+it is true until somebody edits the file for an unrelated reason.
+
+Two weaker designs were rejected before this one.
+
+*Rejected: a runtime flag.* A `--no-write` option, or a bus configured with
+writes disabled, produces a tool that does not write **today**. The write path is
+still present, compiled, and reachable by any future edit that flips a flag, and
+no test would fail if it were flipped — the test suite would simply be exercising
+a different configuration.
+
+*Rejected: a static rule against calling `writeRegister`.* This is closer, but a
+rule about calls is only as good as its patterns. The same reasoning as ADR-023:
+a guard that cannot fire reads as protection while the tree is unprotected. A
+grep for `writeRegister` does not fail when somebody adds a new write-capable
+function and calls that instead.
+
+**Decision 1 — the read-only constraint is the type system's job.**
+
+The EC *configuration* and the *read-only seam* live in `core/ec_access.h`, a
+header that declares no write operation anywhere:
+
+- `EcBusConfig` — ports, masks, command bytes, timeouts, and the validation of
+  those values;
+- `IRegisterReader` — one read operation and one audit method, with no write
+  member to add by accident;
+- `ReaderAudit` — the reader's own account of what it did.
+
+`core/ec_protocol.h` includes `ec_access.h` and adds the transactions, `EcBus`,
+and `EcBusReader` (the seam that adapts a bus to `IRegisterReader`).
+`core/ecdiag.{h,cpp}` and `tools/ecdiag/` include `ec_access.h` and never
+`ec_protocol.h`, so `EcBus` and `writeRegister` are not merely unused by the
+diagnostic: they are not nameable from its translation units.
+
+**Decision 2 — the closure is guarded, because a closed closure is not
+self-maintaining.**
+
+One convenient `#include "ec_protocol.h"` restores the ability to name a write,
+and nothing else in the build would say so. `scripts/check_ecdiag_readonly.py`
+therefore walks the tool's include closure transitively, refuses any header that
+is not on a short commented allowlist, refuses any write API, write-enabling call
+or bus/bridge name in the tool's own sources, and refuses to pass if the runtime
+trace assertions in `tests/ecdiag_tests.cpp` have been deleted. A header that
+cannot be resolved is a violation rather than a skip, so the check cannot quietly
+cover less than it claims.
+
+**Decision 3 — the claim is also checked at runtime, against two witnesses.**
+
+`tests/ecdiag_tests.cpp` drives a complete run through a **real `EcBus`** over the
+fake EC and then asserts on two independent records: the bus's own write trace,
+and the fake's log of registers whose value actually changed. "Attempted" and
+"took effect" are different claims (ADR-023), and the tests assert on both. The
+engine additionally treats a *write command byte on the status port* as an
+invariant violation that outranks every other outcome, so a future regression
+produces a report that says the run is a defect rather than a measurement.
+
+**Consequences.**
+
+- `ec_protocol.h`'s include of `ec_access.h` is the only direction of dependency.
+  Splitting the configuration out was a real cost: every translation unit that
+  uses `EcBusConfig` now also needs `ec_access.cpp`, which is how four of the five
+  Windows test projects came to be unable to link. The fix added the file and
+  `scripts/check_project_sources.py` to keep it added.
+- The tool cannot perform a hardware read until a backend exists (T5-01, T5-02),
+  and it says so: every `--backend` name exits 4 with the reason.
+- A future maintainer who needs a write in the diagnostic cannot add one quietly.
+  They have to change this ADR and the guard in the same diff, which is the point.
+
+**Revisit conditions.** When a backend exists, the seam is extended — a
+read-only method — never widened to a write. If a future diagnostic genuinely
+needs a write, that is a different tool with a hardware gate, and this ADR is the
+record of what would have to be re-decided.

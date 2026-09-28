@@ -9,7 +9,11 @@ reviewer reading a diff is unlikely to notice:
   * a ``ClCompile``/``ClInclude`` item naming a file that is not on disk, which
     builds green as long as nobody happens to rebuild;
   * a project that is not mapped into all four solution configurations, so one
-    configuration silently skips its tests.
+    configuration silently skips its tests;
+  * a project whose ``OutputFile`` is not its own name, which is how all five
+    test projects came to write ``core_tests.exe``: the four executables the
+    workflow runs did not exist, and whichever project linked last overwrote the
+    others, so a job could run one suite and report success for six.
 
 Each of those produces a build that is less than it appears to be, which is why
 this check exists and why it is run in CI.
@@ -151,6 +155,30 @@ def check_project(path):
     sources = [item.get("Include") for item in find("ClCompile") if item.get("Include")]
     if not sources:
         fail("%s: lists no ClCompile items, so it would build nothing" % rel)
+
+    # The linked binary has to be recognisably this project's. Every test
+    # project was cloned from core_tests.vcxproj and inherited its OutputFile,
+    # so five projects linked to the same path: the executables the workflow
+    # runs were never produced, and a build that ran one suite reported success
+    # for all of them. The basename must contain the project's own name, which
+    # is the property the workflow's out\tests\...\<suite>.exe paths assume.
+    stem = os.path.splitext(os.path.basename(path))[0].lower()
+    seen_outputs = set()
+    for item in find("OutputFile"):
+        value = (item.text or "").strip()
+        if not value:
+            continue
+        # One <OutputFile> per configuration; report each distinct value once.
+        if value in seen_outputs:
+            continue
+        seen_outputs.add(value)
+        basename = value.replace("\\", "/").split("/")[-1]
+        if stem not in basename.lower():
+            fail("%s: OutputFile is %r, which is not recognisably this project's "
+                 "(expected the name %r to appear in the file name). A project that "
+                 "writes another project's binary overwrites it, and the executable "
+                 "the workflow runs for this suite will not exist."
+                 % (rel, value, stem))
 
 
 def main():

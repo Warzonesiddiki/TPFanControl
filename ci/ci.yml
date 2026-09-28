@@ -245,10 +245,13 @@ jobs:
 
       - name: Solution and project structure
         # Catches a Project( with no EndProject, a project file that does not
-        # exist, a vcxproj listing a source that is not on disk, and a project
-        # that is not mapped into all four configurations. Every one of those
-        # produces a build that is less than it appears to be, and none of them
-        # is visible without a machine that has MSBuild.
+        # exist, a vcxproj listing a source that is not on disk, a project that
+        # is not mapped into all four configurations, and a project whose
+        # OutputFile is not its own. Every one of those produces a build that is
+        # less than it appears to be, and none of them is visible without a
+        # machine that has MSBuild. The OutputFile rule is the one that would
+        # have caught five projects all linking core_tests.exe - a job that ran
+        # one suite and reported success for six.
         run: python3 scripts/check_projects.py
 
       - name: Every project builds from its own source list
