@@ -31,7 +31,9 @@ $ROOT/fancontrol/core/sensor_validation.cpp
 $ROOT/fancontrol/core/fan_curve.cpp
 $ROOT/fancontrol/core/controller.cpp
 $ROOT/fancontrol/core/io_backend.cpp
+$ROOT/fancontrol/core/ec_access.cpp
 $ROOT/fancontrol/core/ec_protocol.cpp
+$ROOT/fancontrol/core/ecdiag.cpp
 $ROOT/fancontrol/core/app_bridge.cpp
 $ROOT/fancontrol/core/legacy_policy.cpp
 $ROOT/fancontrol/core/legacy_backend.cpp"
@@ -69,6 +71,14 @@ build_and_run ec_protocol_tests \
 
 build_and_run app_bridge_tests \
     "$ROOT/tests/fake_ec.cpp $ROOT/tests/app_bridge_tests.cpp" \
+    "" \
+    "-pthread"
+
+# ecdiag_tests drives the read-only diagnostic. It needs fake_ec.cpp (FakeClock
+# and FakeEcBackend) and -pthread, because the fake and the bus both use
+# std::mutex.
+build_and_run ecdiag_tests \
+    "$ROOT/tests/fake_ec.cpp $ROOT/tests/ecdiag_tests.cpp" \
     "" \
     "-pthread"
 

@@ -1,5 +1,6 @@
-﻿#pragma once
+#pragma once
 
+#include "ec_access.h"
 #include "io_backend.h"
 
 #include <cstdint>
@@ -32,70 +33,6 @@ class SteadyClock final : public IClock {
 public:
     std::uint64_t nowMs() const noexcept override;
     void sleepMs(std::uint64_t milliseconds) noexcept override;
-};
-
-// ---------------------------------------------------------------------------
-// Bus configuration
-// ---------------------------------------------------------------------------
-//
-// The defaults here are transcribed from the legacy application's own EC
-// layer, `fancontrol/portio.cpp`, which is the only in-repo record of how this
-// machine family is actually addressed:
-//
-//     EC_CTRLPORT  0x1604      EC_DATAPORT  0x1600
-//     EC_STAT_OBF  0x01        EC_STAT_IBF  0x02
-//     EC_CTRLPORT_READ  0x80   EC_CTRLPORT_WRITE  0x81
-//
-// That makes them better evidence than a guess, but it is still evidence of
-// WHAT THE SHIPPED APPLICATION DOES, not proof that it is correct on any
-// particular machine. Generic EC documentation describes a 0x62/0x66 interface
-// instead, and EC_REGISTER_MAP.md 3 records both. Phase 0 must confirm the
-// mapping read-only before any write is issued.
-struct EcBusConfig {
-    std::uint16_t statusPort = 0x1604;
-    std::uint16_t dataPort = 0x1600;
-
-    // Status-register bits: input buffer full and output buffer full.
-    std::uint8_t ibfMask = 0x02;
-    std::uint8_t obfMask = 0x01;
-
-    // These are OPERATION CODES, not a base to be OR'd with an address.
-    //
-    // The command byte says only whether the following data-port byte is a
-    // register number to read from or a register number to write to. The
-    // address itself is a full byte, written to the data port in a second
-    // step, which is why this layer can reach registers such as 0x31 and 0x84.
-    //
-    // An earlier design encoded the address into the command byte instead, which
-    // left only four addressable registers and contradicted every call site in
-    // the legacy source. See ADR-020.
-    std::uint8_t readCommand = 0x80;
-    std::uint8_t writeCommand = 0x81;
-
-    // Bounded by construction. Every wait is capped by timeoutMs AND by a
-    // derived poll-count ceiling, so a clock that fails to advance still
-    // terminates the loop instead of spinning.
-    std::uint64_t timeoutMs = 50;
-    std::uint64_t pollIntervalMs = 1;
-    int maximumAttempts = 3;
-
-    // Bounded by construction: the whole pre-transaction recovery wait, which
-    // the legacy code allows a full second.
-    std::uint64_t recoveryTimeoutMs = 100;
-
-    // Rejects a configuration that could loop unboundedly or could not tell a
-    // read from a write. A zero timeout, a zero poll interval, a non-positive
-    // attempt count, identical ports, and an ambiguous command encoding are all
-    // treated as configuration errors rather than silently normalised.
-    bool isSane() const noexcept;
-    std::string validationMessage() const;
-
-    // True when the read and write operations are distinguishable at all.
-    bool commandEncodingIsUnambiguous() const noexcept;
-
-    // Classifies a command byte as a read or a write, or neither.
-    enum class CommandKind { Unknown, Read, Write };
-    CommandKind classifyCommand(std::uint8_t command) const noexcept;
 };
 
 // The fan-selector register. EC_REGISTER_MAP.md section 2 records it as
@@ -233,6 +170,34 @@ private:
     std::vector<BusWrite> writeTrace_;
     std::uint64_t timeoutCount_ = 0;
     std::uint64_t transactionCount_ = 0;
+};
+
+// ---------------------------------------------------------------------------
+// The read-only view a diagnostic uses
+// ---------------------------------------------------------------------------
+// A register-level reader over one bus, and the only EC access ecdiag is given
+// (T5-09). It exists so the diagnostic never names EcBus: the tool is handed
+// something with a single read operation and no way to write, and the audit
+// comes from the bus's own trace rather than from the tool's belief about what
+// it asked for.
+//
+// It does not relax anything. A read through this class has to pass the same
+// preconditions as a direct call, so it fails the same way when the
+// configuration is unusable or the backend is not ready.
+class EcBusReader final : public IRegisterReader {
+public:
+    explicit EcBusReader(EcBus& bus);
+
+    IoResult readRegister(std::uint8_t address) override;
+    ReaderAudit audit() const override;
+
+private:
+    EcBus& bus_;
+
+    // Counted here rather than by the caller, because the comparison between
+    // "reads the plan called for" and "reads that reached a reader" is only
+    // meaningful when the second number comes from the reader.
+    std::uint64_t readsIssued_ = 0;
 };
 
 } // namespace core

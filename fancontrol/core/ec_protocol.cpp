@@ -1,4 +1,4 @@
-﻿#include "ec_protocol.h"
+#include "ec_protocol.h"
 
 #include <algorithm>
 #include <chrono>
@@ -56,62 +56,6 @@ void SteadyClock::sleepMs(std::uint64_t milliseconds) noexcept
         return;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
-}
-
-// ---------------------------------------------------------------------------
-// EcBusConfig
-// ---------------------------------------------------------------------------
-
-bool EcBusConfig::commandEncodingIsUnambiguous() const noexcept
-{
-    return readCommand != writeCommand;
-}
-
-EcBusConfig::CommandKind EcBusConfig::classifyCommand(std::uint8_t command) const noexcept
-{
-    if (command == readCommand) {
-        return CommandKind::Read;
-    }
-    if (command == writeCommand) {
-        return CommandKind::Write;
-    }
-    return CommandKind::Unknown;
-}
-
-bool EcBusConfig::isSane() const noexcept
-{
-    return validationMessage().empty();
-}
-
-std::string EcBusConfig::validationMessage() const
-{
-    if (statusPort == dataPort) {
-        return "EcBusConfig: statusPort and dataPort must differ, otherwise a command "
-            "byte and a data byte are written to the same place";
-    }
-    if (timeoutMs == 0) {
-        return "EcBusConfig: timeoutMs must be greater than zero or every wait would "
-            "time out on its first poll";
-    }
-    if (pollIntervalMs == 0) {
-        return "EcBusConfig: pollIntervalMs must be greater than zero or the poll loop "
-            "would spin without ever advancing the clock";
-    }
-    if (maximumAttempts <= 0) {
-        return "EcBusConfig: maximumAttempts must be positive or a failure could "
-            "never be reported";
-    }
-    if (recoveryTimeoutMs == 0) {
-        return "EcBusConfig: recoveryTimeoutMs must be greater than zero or a busy EC "
-            "could never be recovered";
-    }
-    if (!commandEncodingIsUnambiguous()) {
-        return "EcBusConfig: readCommand and writeCommand are both 0x"
-            + std::to_string(readCommand)
-            + ", so the EC cannot be told a read from a write and neither can this "
-            "layer; they must differ";
-    }
-    return std::string();
 }
 
 // ---------------------------------------------------------------------------
@@ -424,6 +368,42 @@ IoResult EcBus::writeRegister(std::uint8_t address, std::uint8_t value)
         // have landed, and the caller would skip its readback.
         return waitForStatus(config_.ibfMask, false, "input buffer after data");
     });
+}
+
+// ---------------------------------------------------------------------------
+// EcBusReader
+// ---------------------------------------------------------------------------
+
+EcBusReader::EcBusReader(EcBus& bus) : bus_(bus)
+{
+}
+
+IoResult EcBusReader::readRegister(std::uint8_t address)
+{
+    ++readsIssued_;
+    std::uint8_t value = 0;
+    return bus_.readRegister(address, value);
+}
+
+ReaderAudit EcBusReader::audit() const
+{
+    ReaderAudit out;
+    out.readsIssued = readsIssued_;
+    out.transactionCount = bus_.transactionCount();
+    out.timeoutCount = bus_.timeoutCount();
+
+    // The trace, not a guess. Every successful port write the bus issued is
+    // classified by port, so a value that a read would never produce - the
+    // write command byte - is visible rather than assumed absent.
+    const EcBusConfig& config = bus_.config();
+    for (const BusWrite& write : bus_.writeTrace()) {
+        if (write.port == config.statusPort) {
+            out.statusPortWriteValues.push_back(write.value);
+        } else if (write.port == config.dataPort) {
+            out.dataPortWriteValues.push_back(write.value);
+        }
+    }
+    return out;
 }
 
 } // namespace core

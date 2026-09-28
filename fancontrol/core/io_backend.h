@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <cstdint>
 #include <string>
@@ -24,6 +24,10 @@ enum class IoErrorCode {
     ReadFailure,
     WriteFailure
 };
+
+// A stable name for an error code, so a report or a log can carry the
+// classification rather than only a sentence about it.
+const char* toText(IoErrorCode code) noexcept;
 
 struct BackendCapabilities {
     std::string name;
