@@ -49,6 +49,7 @@ The exact machine type, CPU, BIOS revision, graphics configuration, EC port mapp
 | [HARDWARE_VERIFICATION.md](HARDWARE_VERIFICATION.md) | Laptop identification and Phase 0 evidence |
 | [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) | Candidate EC addresses and verification status |
 | [DRIVER_BACKENDS.md](DRIVER_BACKENDS.md) | TVicPort, PawnIO, capability checks, and dependency policy |
+| [DEPENDENCIES.md](DEPENDENCIES.md) | The dependency record: sources, licences, hashes, and what is not established |
 | [SAFETY.md](SAFETY.md) | Safety state machine, failsafes, and limits |
 | [PROFILES.md](PROFILES.md) | INI/profile schema and T14 curve policy |
 | [BUILD.md](BUILD.md) | Reproducible Windows builds and output layout |

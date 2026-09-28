@@ -665,3 +665,85 @@ produces a report that says the run is a defect rather than a measurement.
 read-only method — never widened to a write. If a future diagnostic genuinely
 needs a write, that is a different tool with a hardware gate, and this ADR is the
 record of what would have to be re-decided.
+
+
+## ADR-025 — TVicPort is a documented baseline, never the shipping backend
+
+**Status.** Accepted, T5-11. Applies [DRIVER_BACKENDS.md](DRIVER_BACKENDS.md) §5 and §8 and [SECURITY.md](SECURITY.md) §3 to the one external dependency this repository actually contains.
+
+**Context.** T5-11 asks for a dependency record. Writing it turned up four
+findings that are decisions rather than fields:
+
+1. The vendored import library is 32-bit — all 51 COFF members are `pe-i386` —
+   while the solution declares `Debug|x64` and `Release|x64` for the
+   application, and the project lists the library in all four configurations.
+2. The vendor states the free package is for personal, non-commercial use, and
+   that the licence to "redistribute the driver with your application" is the
+   commercial one.
+3. The product family's 64-bit driver is catalogued as a vulnerable driver:
+   CVE-2026-30769 (CVSS 3.1 7.8, local privilege escalation via IOCTL
+   `0x80002008`, no vendor fix at the time of writing) and a LOLDrivers entry
+   describing device `\\.\TVicPortDevice0` with no DACL.
+4. `LICENSE` attributed the library to a person whose name appears in neither
+   the artefact nor the vendor's site, and pointed at a task (`T0-07`) that is
+   `CONTRIBUTING.md`.
+
+**Decision 1 — the record is an artefact, and it is checked.**
+
+`docs/DEPENDENCIES.md` carries the ten SECURITY.md §3 fields for every
+dependency, each field labelled with how it is known (verified here, vendor
+statement, third-party report, not established). `scripts/check_dependencies.py`
+fails when a recorded checksum or size no longer matches the file on disk, when
+a dependency section is missing one of the ten fields, or when a tracked
+`.lib`/`.dll`/`.sys`/`.exe`/`.msi`/`.cab`/`.zip` has no checksum row. It has its
+own eight-case self-test.
+
+**Decision 2 — no kernel component is redistributed, and nothing asks a user to
+weaken a machine.**
+
+The driver is not in this repository and is not going into it. The import
+library's redistribution basis is recorded as **not established**, and `LICENSE`
+now claims only what the vendor's page supports. Whether the driver loads under
+Secure Boot, HVCI or the vulnerable-driver blocklist is *measured* on the target
+machine (T4-06, T5-03) — never worked around, and never a reason to tell a user
+to disable a protection.
+
+**Decision 3 — TVicPort is not a candidate for the modern backend.**
+
+It stays what it already was: the legacy baseline, measured at T5-01 and T4-06
+so the replacement has something to be compared against. Adoption is closed by
+its security history, not by preference. The modern backend decision belongs to
+T5-02 and is recorded in `DRIVER_BACKENDS.md` §6.
+
+**Alternatives considered.**
+
+- *Keep the record as prose and trust it* — rejected. The field that rots is the
+  checksum, and a record describing a file that is no longer in the tree is
+  worse than no record, because it is quoted.
+- *Delete the import library now* — rejected. It would break the legacy build
+  and the baseline measurement, and the question is a release gate, not a reason
+  to break the tree. The record marks it open and `RELEASE.md` gates it.
+- *Treat the CVE as out of scope because no driver ships here* — rejected. The
+  project's own baseline instruction is to install the vendor package; "not our
+  binary" is not a mitigation, and `DRIVER_BACKENDS.md` §5 requires the security
+  history to be part of the evaluation.
+
+**Safety impact.** No new privileged access, no EC writes, no startup change.
+It removes a plausible future path — bundling or auto-loading a driver — and
+adds a release gate.
+
+**Testing and evidence.** `scripts/check_dependencies.py --selftest` (8 fixtures,
+including a tampered hash and an unrecorded artefact); the live run over the tree
+(2 dependency sections with all ten fields, 2 artefacts hashed and matched, 1
+tracked binary artefact recorded); the TVicPort hashes were taken from the
+committed files. No hardware claim is made anywhere in the record.
+
+**Consequences.** The x64 link gap is written down rather than latent — see
+`BUILD.md` §5 and `DEPENDENCIES.md` §4.4. `LICENSE`'s TVicPort exception is now
+accurate. A future commit that adds a binary without recording it fails the
+hygiene job instead of passing review.
+
+**Revisit conditions.** A commercial licence is obtained and a 64-bit package is
+recorded (the CVE still applies to file version 5.2.1.0, so a fixed version
+would be required); or T5-02 selects PawnIO and its ten fields are completed; or
+the baseline is dropped entirely and the import library leaves the tree.

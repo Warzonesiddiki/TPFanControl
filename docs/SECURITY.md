@@ -34,6 +34,11 @@ Before adopting a backend, document:
 
 Do not rely on a backend merely because a community utility loads it on one machine.
 
+The record itself is [DEPENDENCIES.md](DEPENDENCIES.md), one section per
+dependency, each field labelled with how it is known. `scripts/check_dependencies.py`
+fails when a recorded hash stops matching the file, when a section is missing one
+of the ten fields, or when a tracked binary artefact has no checksum row.
+
 ## 4. Input validation
 
 Treat all configuration as untrusted input. Validate:

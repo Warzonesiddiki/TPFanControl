@@ -1,214 +1,194 @@
 # `ecdiag` — the read-only EC diagnostic
 
-Status: **implemented and unit-tested on Linux.** See [§9](#9-verification-performed-and-what-is-not-verified)
-for exactly what that does and does not include. It has no live backend, so it has
-never read a real EC — see [§7](#7-what-is-not-established).
+`ecdiag` reads a fixed list of candidate Embedded Controller offsets and writes a
+report that a human can quote and a script can parse. It performs no register
+writes, and it has no option that would let it perform one.
 
-`ecdiag` reads a fixed list of candidate embedded-controller offsets and writes a
-report. It has no register-write operation anywhere in its code, and no option
-that would allow one. Its purpose is to make the Phase 0 measurements in
-[EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §9.1 collectable in a form a report can
-quote, on a machine where nothing may be written yet.
+**Status: implemented and unit-tested on Linux. It has never run on Windows, and
+it has never read a real machine** — no live backend exists ([DRIVER_BACKENDS.md](DRIVER_BACKENDS.md),
+T5-01 and T5-02), so every `--backend` name exits 4 with the reason. Everything
+below is true of the tool; none of it is a hardware claim.
 
-It is **not** the `TPFanControl.exe --status` command described in
-[CLI_DIAGNOSTICS.md](CLI_DIAGNOSTICS.md) §1. Those commands are an integration
-target inside the application. `ecdiag` is a separate, portable tool that exists
-so the read-only half can be built, tested and run before any of that is wired up.
+## 1. What it is, and what it refuses to be
 
-## 1. What it does
+It is the read-only half of the command surface described in
+[CLI_DIAGNOSTICS.md](CLI_DIAGNOSTICS.md) §1: measurement and reporting, without
+control. What it is *not*:
 
-- reads a set of offsets an explicit number of times each (default 3, maximum 32);
-- records, per offset, whether every read succeeded, whether the value was stable
-  across samples, and the minimum and maximum seen;
-- reports the configuration the run used, including the port numbers, masks,
-  command bytes and timeouts;
-- reports what the reader says it did, and checks that account against the plan;
-- refuses to do anything else.
+- not a control tool. There is no profile, no curve, no fan level, and no
+  "apply";
+- not a register explorer. `--address` accepts an offset, but the offsets this
+  tool reads by default are the documented candidates from
+  [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §2, and a value read from an offset is
+  reported as a raw byte — never summarised into a temperature, an RPM or a fan
+  state;
+- not evidence on its own. A run states which evidence grade it reached and, when
+  that grade is not `hardware`, why not. A simulated run cannot be mistaken for a
+  measurement because the report says so in three places.
 
-The default target list is the documented candidate set — `0x2F`, `0x31`, `0x84`,
-`0x85`, `0x78`–`0x7F`, `0xC0`–`0xC3` — with the candidate meaning of each offset
-recorded beside it. Every one of those labels is a **candidate**, transcribed from
-the legacy source or from generic documentation; the report says so at every
-level, and `--list-candidates` prints the set without touching anything.
+## 2. Read-only by construction
 
-## 2. Modes, and what each one is evidence of
+The claim is structural, not procedural: there is no function for the tool to
+call that writes.
 
-| Mode | What happens | Evidence grade in the report |
+1. **The type it is handed.** `ecdiag` takes a `core::IRegisterReader` — one read
+   operation, no write member (`fancontrol/core/ec_access.h`). `EcBus` adapts to
+   that interface; the tool never names `EcBus`, `IIoBackend` or the bridge.
+2. **The closure it cannot escape.** `scripts/check_ecdiag_readonly.py` walks the
+   tool's includes and fails the build if the closure reaches anything that can
+   write. It also fails if the runtime trace assertions below disappear. It has
+   a 13-case self-test and is wired into the CI hygiene job.
+3. **The trace it leaves.** `tests/ecdiag_tests.cpp` runs a complete diagnostic
+   over a **real `EcBus`** and a fake EC, then asserts on two independent
+   records: the bus's write trace (empty) and the fake's log of registers whose
+   value actually changed (empty). "Attempted" and "took effect" are checked
+   separately (ADR-023). A write command on the status port is an invariant
+   violation that outranks every other outcome, so a future regression produces
+   a report that says *the run is a defect* rather than a measurement.
+
+## 3. Modes and evidence grades
+
+| Mode | I/O performed | Evidence grade in the report |
 |---|---|---|
-| `--plan` (default) | Nothing is read. The plan and the configuration are recorded. | `plan-only` |
-| `--simulate` | Reads run against an invented register table inside the tool. | `simulated` |
-| `--backend <name>` | Would use a hardware backend. None exists in this build; every name reports why and exits 4. | — |
+| `--plan` (default) | none at all | `plan-only` |
+| `--simulate` | reads an invented register table | `simulated` |
+| `--backend <name>` | none: no backend exists in this build | exits 4 before reading |
+| (future) a verified backend | reads against hardware | `hardware` |
 
-A fourth grade, `hardware`, exists in the schema and is reachable only once a real
-backend performs the reads. Until then every report carries an explicit
-`not_evidence_reason` saying which of the two weaker things it is. There is no
-mode that produces a `hardware` grade today, and no code path that could assign
-one to a simulated or planned run.
+A run that never touches hardware must not be quotable as if it did. The
+`evidence` block carries the grade and a `not_evidence_reason` that names the
+substitution, and the limitations list repeats it in text.
 
-Plan-only mode is deliberately not `--quiet` about being empty. Its table prints
-`not read` in every value cell rather than omitting the rows, because a report
-that looks empty and a report that says "nothing was read" invite different
-mistakes: the first looks like a run that found nothing, which is a finding; the
-second is a statement about the report itself. `PlanOnly` is also a distinct
-outcome from `Ok` in the schema, for the same reason.
+## 4. Running it
 
-## 3. Running it
+Built by `./tests/run_core_tests.sh`, which also smoke-tests the modes and exit
+codes. To build it alone:
 
-The portable runner builds and exercises it on every leg:
-
-```
-./tests/run_core_tests.sh          # builds all suites and the tool
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+  -I fancontrol/core -I tools/ecdiag \
+  fancontrol/core/*.cpp tools/ecdiag/*.cpp \
+  -o /tmp/ecdiag -pthread
 ```
 
-On Windows there is `tools/ecdiag/ecdiag.vcxproj`, registered in
-`fancontrol/fancontrol.sln` with the same four configurations as every other
-project. It shares the portable sources with the Linux build, and
-`scripts/check_project_sources.py` compiles the project's own source list on this
-machine so the two cannot drift apart silently.
+The sources are `fancontrol/core/ecdiag.{h,cpp}` (the portable engine),
+`tools/ecdiag/main.cpp` (the front end) and `tools/ecdiag/simulated_ec.{h,cpp}`
+(an invented-table reader that implements **only** `IRegisterReader`).
 
 ```
-ecdiag --plan                      # what a run would do; no I/O
-ecdiag --plan --json               # the same, machine-readable
-ecdiag --simulate                  # exercise the tool against invented values
-ecdiag --address 0x2F --samples 5  # a narrower, longer plan
-ecdiag --list-candidates           # the offsets and their candidate meanings
-ecdiag --output report.json --force
+ecdiag [--plan | --simulate | --backend <name>]
+       [--address <byte>]... [--range <first-last>]... [--candidates]
+       [--samples <n>] [--list-candidates]
+       [--status-port/--data-port/--read-command/--write-command/
+        --ibf-mask/--obf-mask/--timeout-ms/--poll-ms/--attempts/--recovery-ms]
+       [--json] [--output <file>] [--force] [--quiet] [--version] [--help]
 ```
 
-`--output` opens the path directly. It is never passed to a shell, and an
-existing file is never replaced without `--force`. A failure to write the report
-exits 8 and says so on stderr.
-
-## 4. Read-only by construction
-
-Three independent mechanisms, because the claim is the whole point of the tool
-and a single one of them could be true while the others were not.
-
-**The type.** `ecdiag` is given a `core::IRegisterReader` — one read operation,
-one audit method, no write member — and its headers include only
-`ec_access.h`, `io_backend.h` and itself. `EcBus`, `writeRegister` and the control
-path are not merely unused: they are not nameable from the tool's translation
-units. This is why the EC configuration lives in `ec_access.h` and not inside
-`ec_protocol.h`; see [ADR-024](DECISIONS.md#adr-024--the-read-only-diagnostic-is-read-only-by-construction).
-
-**The closure guard.** `scripts/check_ecdiag_readonly.py` walks the tool's
-`#include` closure transitively and refuses any header that is not on a short,
-commented allowlist. A closed closure is not self-maintaining: one convenient
-`#include "ec_protocol.h"` restores the ability to name a write, and nothing in the
-build would say so. The guard also refuses to pass if the runtime assertions in
-`tests/ecdiag_tests.cpp` have been deleted, because a structural guarantee whose
-evidence has been removed is a guarantee nobody is checking. Its `--selftest`
-proves each rule still fires, including the three cases that must *not* fire.
-
-**The runtime evidence.** `tests/ecdiag_tests.cpp` drives a complete run through a
-**real `EcBus`** over the fake EC and then asks two independent witnesses what
-happened: the bus's own write trace, and the fake's log of registers whose value
-actually changed. The invariant is that no status-port write may carry the write
-command byte, no data-port write may be anything other than a planned address, the
-number of data-port writes may not exceed the number of command writes, and the
-reader's own read count must equal the plan. A reader that lied about any of it
-would have to lie somewhere the tests can see.
-
-The guard also states what it cannot do, which is worth repeating: it cannot prove
-the remaining test still asserts anything meaningful. That is why the property was
-broken on purpose during development — a real register write through a real bus —
-and the suite failed, as it should have.
+Configuration defaults are **candidate values transcribed from the legacy source**
+(`fancontrol/portio.cpp`), not measurements; the report records them, says where
+they came from, and marks the encoding `unverified-candidate`. `--output` writes
+the path directly (never through a shell), refuses to replace an existing file
+without `--force`, and reports a failure as exit 8 rather than silently not
+writing.
 
 ## 5. The report
 
-Text output is for a person; `--json` is the same run in the form a report can
-quote. The schema is `tpfancontrol.ecdiag/1`.
+### Text
 
-| Field | Contents |
+A header with tool version, generation time, mode, backend, the configuration and
+its source; one row per planned offset with its candidate meaning, the values
+observed, and whether the value was stable; the audit; the read-only invariant;
+the outcome; and the limitations. In `--plan` mode the value cells say `not read`
+— the table is driven by the plan, so an unperformed read is visibly unperformed
+rather than absent.
+
+### JSON (`tpfancontrol.ecdiag/1`)
+
+| Key | Contents |
 |---|---|
-| `tool` | name, version, build flavour, UTC timestamp, purpose |
-| `evidence` | `grade` (`hardware` / `simulated` / `plan-only`) and, when it is not hardware, `not_evidence_reason` |
-| `outcome`, `exit_code` | the result, and the code the process exits with |
-| `configuration_error` | non-null only when the plan or configuration was refused |
-| `config` | every value the run used, in decimal and hex, with `source` and `encoding_status` |
-| `backend` | name, version, state, capabilities — or `null` where there is no backend |
-| `plan` | samples per target, target count, and each target's address and candidate meaning |
+| `schema` | `"tpfancontrol.ecdiag/1"` — a consumer must check this string |
+| `tool` | name, version, build flavour, generation time (UTC), purpose |
+| `evidence` | `grade` (`hardware` / `simulated` / `plan-only`) and `not_evidence_reason` |
+| `config` | every setting used, decimal and hex, plus `source`, `encoding_status`, `sane`, `validation_message` |
+| `backend` | name, version, state, capabilities (or explicit nulls) |
+| `plan` | samples per target, target count, and the targets with their candidate meanings |
 | `summary` | targets, samples, successful, failed |
-| `reads[]` | per offset: success and failure counts, stability, distinct values, `value`/`value_hex`, min/max (or `null`), and the first error |
-| `audit` | the reader's own account: reads received, bus transactions, timeouts, and every status- and data-port write value |
-| `read_only_invariant` | `held` or not, the number of write command bytes observed, and any failures |
-| `limitations[]` | what this particular run does not establish |
+| `reads[]` | per offset: success/failure counts, `stable`, `distinct_values`, min/max, first error, and every sample with its own result, value, error and elapsed time |
+| `audit` | reads received by the reader, bus transactions, timeouts, status-port writes (count and distinct values), data-port writes |
+| `read_only_invariant` | `held`/`violated`, write commands observed, and each failure |
+| `limitations[]` | what this particular run does and does not establish |
 
-Unknown values are `null`, never `0`. A zero is a legitimate byte on an EC, so
-using it for "no value" would make a missing measurement indistinguishable from a
-measured zero — the distinction the whole report exists to preserve. Ports are
-16-bit and printed from the full value, so `0x1604` cannot appear as `0x04`.
-
-`encoding_status` is always `unverified-candidate`: the port mapping, the command
-bytes and the masks are transcribed from `fancontrol/portio.cpp`, which records
-what the shipped application does, not what the hardware requires.
+Unknown values are explicit `null`, never `0`. A failure carries an error code
+and a message; a failed read reports **no value** rather than a fabricated zero,
+and a legitimate `0x00` is reported as a value.
 
 ## 6. Exit codes
 
 | Code | Meaning |
-|---:|---|
-| 0 | Completed: `ok`, or `plan_only` |
-| 1 | A general error, or the read-only invariant was violated |
-| 2 | Invalid command line |
-| 3 | The configuration or plan is unusable |
-| 4 | Backend unavailable |
-| 6 | No read succeeded, for a reason that is not a missing backend |
-| 8 | The report could not be written |
+|---|---|
+| 0 | `ok`, or `plan_only` — the run did what it said and nothing was wrong |
+| 1 | general error, or a **read-only invariant violation** (never a measurement) |
+| 2 | bad arguments |
+| 3 | invalid configuration (e.g. the two ports are the same) |
+| 4 | backend unavailable — no backend exists, or the named one is not implemented |
+| 6 | sensor data unavailable — no read succeeded, or only some did |
+| 8 | report not written (`--output` in use) |
 
-Codes 5 and 7 are in [CLI_DIAGNOSTICS.md](CLI_DIAGNOSTICS.md) §3 but unreachable
-here by design: there is no control path to gate and no failsafe state to report.
-An invariant violation exits 1 rather than a code of its own, because a
-diagnostic that is not read-only has no results worth reading and the run is a
-defect report, not a measurement.
+Codes 5 (identity/profile not verified) and 7 (failsafe active) are unreachable
+**by design**: this tool has no control path to gate and no failsafe state to
+report. [CLI_DIAGNOSTICS.md](CLI_DIAGNOSTICS.md) §3 defines them for the
+application command surface; a diagnostic must not invent them.
 
-## 7. What is not established
+## 7. The analysis invariants
 
-- **No machine has been read.** There is no backend in this build. `--backend
-  tvicport` is T5-01 and needs Windows and the vendor driver; `--backend pawnio`
-  is T5-02, which is blocked on a disposable Windows install and an HVCI-capable
-  machine. Both exit 4 without reading, and both say why.
-- **A value read from an offset does not mean what the offset's label says.**
-  Reading is not interpreting. Correlating a byte with a temperature, an RPM or a
-  fan state is a human step ([HARDWARE_VERIFICATION.md](HARDWARE_VERIFICATION.md)
-  §7), and it is why the report records raw values with their candidate labels
-  rather than a summary.
-- **`--simulate` is not evidence about anything.** It runs against an invented
-  table with no ports behind it. Its only claim is that the tool, the checks and
-  the report format work.
-- **A clean report is not a verification.** It says the reads succeeded and
-  nothing was written. It does not say the values are correct, or that the
-  configuration is the one this machine uses.
+Four checks run over the audit, because a read-only tool that quietly did
+something else is the failure this project cares most about:
 
-## 8. Where it fits
+1. no write command was observed on the status port;
+2. no value was written to the data port that was not part of the plan;
+3. the data-port write count does not exceed the status-port write count;
+4. the reader's own read count equals targets × samples.
 
-Once a backend exists, the intended use is Phase 0:
-[T4-07 … T4-12](IMPLEMENTATION_CHECKLIST.md) are read-only evidence collection,
-and `ecdiag` is how that evidence is produced and recorded, with the report's
-`config` block recording the configuration it was produced under. The tool
-deliberately does not decide anything: classification stays with a person and ends
-up in `docs/reports/`.
+Any failure is reported as `InvariantViolated` (exit 1) and outranks a complete
+set of readings — a partial read set that is honest is a better result than a
+full one produced by a machine that did something unexplained. Failures are
+capped at 8 messages plus a count of further findings, both in the JSON and in
+the text report.
 
-[T7-11](IMPLEMENTATION_CHECKLIST.md) — a read-only CLI for status and profile
-validation inside the application — remains to be done. It shares this tool's
-contract ([CLI_DIAGNOSTICS.md](CLI_DIAGNOSTICS.md)) but not its code.
+## 8. What it does not do
 
-## 9. Verification performed, and what is not verified
+- **It does not read a machine yet.** Every `--backend` name exits 4 with a
+  reason naming the task that must land first (T5-01, T5-02). The tool has been
+  exercised against a real `EcBus` and a fake EC; it has never touched a port.
+- **It does not establish that an offset means what its label says.** The labels
+  are candidates. Correlating a byte with an independent measurement is a human
+  step ([HARDWARE_VERIFICATION.md](HARDWARE_VERIFICATION.md) §7).
+- **It does not decide anything.** No report sets a register, chooses a profile,
+  or claims a machine is safe to control.
+- **It does not prove the port mapping.** The two competing mappings
+  ([EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §3.1) are configuration, and the
+  report says which configuration produced it.
 
-Verified here, on Linux, with g++:
+## 9. Where it fits
 
-- 29 tests in `tests/ecdiag_tests.cpp`, run by `tests/run_core_tests.sh`, covering
-  the engine, plan-only mode, the invariant checks, the JSON writer, the strict
-  JSON self-test, and the front end's option parsing and exit codes;
-- the tool is built and run by the same script on every CI leg, with its exit
-  codes (4 for a backend, 2 for a bad option, 3 for an unusable configuration)
-  asserted rather than assumed;
-- `scripts/check_ecdiag_readonly.py` and its 13-case self-test;
-- `scripts/check_project_sources.py` builds `tools/ecdiag/ecdiag.vcxproj` from its
-  own source list.
+- **T4-07 … T4-12** — this is the tool that performs the read-only measurement on
+  the target machine. Its report is what goes into the Phase 0 hardware report,
+  with a real backend behind it.
+- **T5-01, T5-02** — the backends. When one exists, `--backend <name>` becomes a
+  hardware run and the evidence grade becomes `hardware`.
+- **T7-11** — the in-application status and profile-validation command surface is
+  still to come; it will share this report format rather than invent a second one.
 
-Not verified: **the tool has never run on Windows and has never read a real EC.**
-`tools/ecdiag/ecdiag.vcxproj` and `tests/ecdiag_tests.vcxproj` are present and
-mapped into all four solution configurations, and their source lists are compiled
-here, but building them under MSVC is unverified until
-`ci/ci.yml`'s `windows-build` job runs. Until a backend exists, a hardware report
-cannot be produced by this tool at all.
+## 10. Verification performed, and not performed
+
+Performed here: `tests/ecdiag_tests.cpp` (29 tests) covering the plan, the
+four invariants (each fired deliberately), partial and total read failure,
+`0x00` as a value, unstable values, timeouts, configuration refusal, the report
+schema, JSON escaping with a self-testing parser, and exit-code agreement with
+the table above; `scripts/check_ecdiag_readonly.py` with its 13-case self-test;
+the build and smoke test inside `./tests/run_core_tests.sh`.
+
+Not performed: any Windows build, any MSVC compile, any run against a real
+backend, and any measurement of any register. The `ecdiag` tool is not evidence
+that this project can read an EC — it is the instrument that will produce that
+evidence when T5-01 or T5-02 lands.

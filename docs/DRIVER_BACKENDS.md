@@ -41,6 +41,12 @@ Phase 1 should answer these questions instead of assuming the answer:
 
 Record the result in the Phase 0/Phase 1 report. The project must not silently require the user to disable Windows security features.
 
+The artefact in this repository does not answer any of those questions, and it
+does block one of them: the vendored import library is 32-bit (all 51 COFF
+members are `pe-i386`), so an x64 link cannot use it. See
+[DEPENDENCIES.md](DEPENDENCIES.md) §4.4, which is also where the vendor's
+licensing terms and the product family's vulnerability record are written down.
+
 ## 4. PawnIO feasibility
 
 PawnIO is a candidate modern backend. Treat it as an external dependency whose current official API, module format, signing model, licensing, and supported architectures must be verified from the official distribution before coding against it.
@@ -90,7 +96,7 @@ Do not advertise Win32 compatibility merely because the source compiles. Record 
 
 | Backend | Win32 app | x64 app | Secure Boot | HVCI | Control allowed |
 |---|---|---|---|---|---|
-| TVicPort | Not tested | Not tested | Not tested | Not tested | No decision |
+| TVicPort | Not tested | Cannot link: the vendored import library is 32-bit ([DEPENDENCIES.md](DEPENDENCIES.md) §4.4) | Not tested | Not tested | No decision |
 | PawnIO | Not tested | Not tested | Not tested | Not tested | No decision |
 | Fake backend | Test only | Test only | N/A | N/A | Never hardware |
 
@@ -119,3 +125,6 @@ The UI should display an actionable message without exposing unsafe remediation 
 - Store checksums for installers or downloaded packages.
 - Prefer a user-installed official driver over silently bundling a kernel component.
 - Test uninstall and rollback before recommending installation.
+- The record this policy requires is [DEPENDENCIES.md](DEPENDENCIES.md):
+  checksums for the artefacts in the tree, the ten fields above per dependency,
+  and `scripts/check_dependencies.py` to fail the build when it goes stale.

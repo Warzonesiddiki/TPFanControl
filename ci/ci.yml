@@ -2,9 +2,11 @@ name: CI
 
 # Tasks covered:
 #   T1-08  portable core tests on Linux, macOS and Windows
-#           (all seven suites: core_tests, ec_protocol_tests, app_bridge_tests,
+#           (all six suites: core_tests, ec_protocol_tests, app_bridge_tests,
 #            ecdiag_tests, legacy_policy_tests and legacy_backend_tests)
 #           plus the ecdiag tool itself, built and smoke-tested
+#   T5-11  the dependency record: hashes match, ten fields per dependency,
+#           every tracked binary artefact recorded
 #   T1-09  Release build with warnings-as-errors on the core
 #   T1-10  git diff --check and a link check
 #   T1-11  Windows test target
@@ -323,6 +325,20 @@ jobs:
         run: |
           python3 scripts/check_ecdiag_readonly.py --selftest
           python3 scripts/check_ecdiag_readonly.py
+
+      - name: The dependency record describes the files that are here
+        # T5-11. The record pins the vendored import library by hash, carries the
+        # ten fields SECURITY.md section 3 requires for each dependency, and has
+        # to cover every tracked .lib/.dll/.sys/.exe/.msi/.cab/.zip. A checksum
+        # row that no longer matches the file - or a binary that never entered
+        # the record - is the failure mode this catches, and neither is visible
+        # by reading the document.
+        #
+        # The self-test runs first: the record's rules are exactly the kind that
+        # can stop matching while still reporting success.
+        run: |
+          python3 scripts/check_dependencies.py --selftest
+          python3 scripts/check_dependencies.py
 
       - name: Markdown link check
         run: python3 scripts/check_links.py

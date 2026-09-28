@@ -22,7 +22,7 @@ Legend:
 |---|---|
 | Documented safety gaps closed | 6 of 10 (gaps 1, 2, 3, 4, 5, 8) |
 | Portable-core test functions | 11 core + 42 EC + 31 bridge + 29 ecdiag + 20 policy + 16 backend = 149, plus a self-test for the three checkers that could otherwise stop matching silently (`check_ecdiag_readonly.py`, `check_project_sources.py`, `check_ci_steps.py`) |
-| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5: 05, 06, 07, 08, 09, 10 complete, 04 in progress, 02 blocked, 01/03/11 not started |
+| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5: 05, 06, 07, 08, 09, 10, 11 complete, 04 in progress, 02 blocked, 01/03 not started |
 | Critical path | T0 → T1 → T5 → T3 → T4 → T6 → T8 |
 | Biggest single risk | The portable core is not connected to the application. It is compiled by the project and tested, but no legacy file includes a core header, so the safety state machine is dead code that can drift from shipped behaviour indefinitely without any signal. |
 
@@ -113,16 +113,16 @@ are verified locally. Tasks are promoted to `[x]` only when a CI run supplies ev
 | T3-05 | Delete or quarantine the legacy decision code once the core is authoritative | `[!]` | Blocked, and the reason is structural rather than environmental. What is done: `evaluateIntent` is the only place a UI request becomes a core request, and `check_legacy_ec.py` fails the build on a fan-level write from outside the core. What remains: the legacy `SmartControl` temperature table still computes a level. It no longer reaches a register — it feeds a core request, which is already a real reduction — but it is not deleted. Deleting it means moving the periodic *sensor* cycle onto the core first (T3-04's remaining half), and that work cannot be verified here: `HandleData` is Win32 timer code and the application does not compile on this machine. Deleting the table before the replacement cycle is verified would leave the application with no decision path at all, which is the opposite of authoritative. `evaluateIntent` is now the only place a UI request becomes a core request, and `check_legacy_ec.py` fails the build on a fan-level write from outside the core. The legacy `SmartControl` table still computes a level and is still called; it now feeds a core request rather than a register write, but it is not deleted. Deleting it needs the sensor cycle moved first.
 | T3-06 | Serialise the EC transaction against the application's worker thread | `[x]` | Done for the write path. `SetFan` holds `EcAccess` across the bridge's write and its readback, so the worker thread cannot interleave between them. The read path still needs the same treatment and is not yet done.
 | T3-07 | Map `SafetyState` and `ControlMode` to UI text without bypassing transitions | `[x]` | Done. `toText(SafetyState)`, `toText(ControlMode)`, `toText(FanHealth)`, `toText(SensorValidity)` and `describe()` are in `core/app_bridge.h`, tested, and `describe` is never empty so a blank status cannot read as healthy. The dialog still shows its own strings; mapping them is UI work.
-| T3-08 | Build the application's state each cycle and assert no fan command without core approval | `[x]` | Done. `AppBridge::apply` refuses any output the core did not authorise, before touching the bus, and there is no other method in the class that writes a register. 29 tests, including the assertion that the written register set is exactly `{0x2F}`.
+| T3-08 | Build the application's state each cycle and assert no fan command without core approval | `[x]` | Done. `AppBridge::apply` refuses any output the core did not authorise, before touching the bus, and there is no other method in the class that writes a register. 31 tests, including the assertion that the written register set is exactly `{0x2F}`.
 | T3-09 | Keep monitor-only operation working when the backend is absent, end to end | `[x]` | Done. `LegacyBackend` is `Ready` while read-only, reads work, and every write returns `Unsupported`. `evaluateIntent` refuses every write source in monitor-only mode. Tested. Not yet exercised end to end in the running application — that needs Windows.
 | T3-10 | Report backend failure, write failure and readback mismatch into the controller | `[x]` | Done. `AppBridge::makeInput` carries `backendFailure`, and the controller's own faults (`writeFailure`, `readbackMismatch`, `fanResponseFailed`) are reported from `apply` results. Tested in both directions: a read failure with restore verified fails safe to the firmware; without verified restore, nothing is issued.
 | T3-11 | Do not reintroduce the legacy unconditional `0x31` write on the dual-fan path | `[x]` | Done. No write to `0x31` exists in the repository. `scripts/check_legacy_ec.py` fails the build if one reappears, and `check_legacy_ec_selftest.py` proves the guard still fires. Both verified by reintroducing the defect. ADR-021, `EC_REGISTER_MAP.md` §10.
 | T3-12 | Record the integration in an ADR | `[x]` | Done. ADR-021 (refusing to address an individual fan), ADR-022 (superseded) and ADR-023 (the register-write barrier belongs to EcBus; the backend is a port backend).
 
 **T3 evidence note — what has and has not been shown.** Everything marked done in
-this table is verified by a runnable artifact in this repository: 120 tests across
-five suites, passing plain, under `-O2 -DNDEBUG`, under ASan+UBSan and under TSan,
-plus four static checkers. None of that is a Windows build. The application has
+this table is verified by a runnable artifact in this repository: 149 tests across
+six suites, passing plain, under `-O2 -DNDEBUG`, under ASan+UBSan and under TSan,
+plus the static checks in `scripts/`. None of that is a Windows build. The application has
 never been compiled here, because there is no Windows machine and no MSVC. The
 core call sequence `SetFan` makes was typechecked by a separate translation unit
 that mirrors it statement for statement, which catches an API mismatch but is not a
@@ -172,7 +172,7 @@ would imply a capability the project does not have.
 | T5-08 | Impossible RPM fault injection | `[x]` | Fixed a real defect: `evaluateFanHealth` reported **Healthy** for 65535 RPM — the one answer that must never be reported for a value that cannot be a measurement. Added `validateFanRpm` (`FanRpmPolicy`, `ValidatedFanRpm`) with plausibility bounds, sentinel handling (`0xFFFF`, `0x8000`; **0 excluded** so a stopped fan stays distinguishable), and freshness; `ControllerInput::timestampMs` carries when the reading was taken. `testImplausibleRpmIsNotReportedHealthy` pins all five rejection classes and then asserts a plausible reading still returns `Healthy`, so the fix is not just "report `Failed` for everything". |
 | T5-09 | Read-only `ecdiag` tool | `[x]` | `fancontrol/core/ecdiag.{h,cpp}` (portable engine), `tools/ecdiag/{main.cpp,simulated_ec.{h,cpp}}` (front end and an invented-table reader), `tests/ecdiag_tests.cpp` (**29 tests**), [ECDIAG.md](ECDIAG.md). Read-only is structural, not a promise: `ecdiag` is handed `core::IRegisterReader` (one read operation, no write member) and its include closure cannot reach `EcBus` — enforced by `scripts/check_ecdiag_readonly.py` and its 13-case self-test — and a complete run through a **real `EcBus`** over the fake EC is asserted against the bus's own write trace and the fake's committed-write log (`testFullRunThroughARealBusWritesNoRegister`, `testReadOnlyInvariantFiresWhenARealWriteReachesTheBus`). Modes `--plan` (no I/O at all) and `--simulate`; JSON schema `tpfancontrol.ecdiag/1` with an evidence grade (`plan-only`/`simulated`/`hardware`) and an explicit `not_evidence_reason`, because a report that could pass a simulated run off as a measurement would be worse than no report. Exit codes 0/2/3/4/6/8 with 5 and 7 unreachable by construction. Ports print as 16-bit hex (`0x1604`, never `0x04`). `tools/ecdiag/ecdiag.vcxproj` builds it on Windows. **No live backend exists**: every `--backend` name exits 4 with the reason (T5-01, T5-02), so the tool has never read a machine, and nothing here claims otherwise. |
 | T5-10 | Prove the single-fan path never writes `0x31` | `[x]` | `EcBus::writeRegister` refuses `0x31` **before touching any port** (`testFanSelectorWriteIsRefusedBeforeAnyBackendCall` asserts `backend.operationCount() == 0`, not merely that the call returned an error). The refusal is checked against **all 256** values, because a rule that only catches the value the code happens to use is not a rule. `setFanSelectorWritesAllowed` is **never called anywhere in product code** — verified by grep over `*.cpp`/`*.h` excluding `tests/`, which finds only the declaration and the definition. Assertions are made against the bus's own write trace and the fake's committed-write log, never against intent. |
-| T5-11 | Dependency record per [SECURITY.md](SECURITY.md) §3: source, license, version, signature, architecture, uninstall, redistribution | `[ ]` | Not started. |
+| T5-11 | Dependency record per [SECURITY.md](SECURITY.md) §3: source, license, version, signature, architecture, uninstall, redistribution | `[x]` | [DEPENDENCIES.md](DEPENDENCIES.md): the ten fields for TVicPort — the only external artefact tracked here — and for PawnIO, which is a candidate and not adopted. Every field carries how it is known (verified here / vendor statement / third-party report / **not established**, naming the task that must establish it), because a record that cannot distinguish "we checked" from "we assumed" is worse than no record. The two tracked artefacts are pinned by SHA-256 and size, and `scripts/check_dependencies.py` (8-case self-test) fails when a recorded hash or size stops matching, when a dependency section is missing one of the ten fields, or when a tracked `.lib`/`.dll`/`.sys`/`.exe`/`.msi`/`.cab`/`.zip` has no checksum row; demonstrated by replacing the recorded TVicPort hash with zeros in the tree and watching the check fail with both hashes, then restoring the record from the bytes read beforehand. What the record established with evidence: the vendored import library is 32-bit — all 51 COFF members are `pe-i386` — so **the declared x64 configurations cannot link it**; the vendor licenses the free package for personal, non-commercial use only and grants redistribution of the driver only under the commercial licence; and the product family's 64-bit driver is a catalogued vulnerable driver (CVE-2026-30769, CVSS 7.8, plus a LOLDrivers entry describing a device object with no DACL), with no vendor fix recorded. The consequence is ADR-025: TVicPort stays a documented baseline, never the shipping backend, and nothing in this project asks a user to weaken a machine to load it. **No hardware claim:** signature chain, HVCI/Secure Boot behaviour, uninstall/rollback and the 32-bit driver's own vulnerability status are all marked not established, with T5-03/T4-06 or the release gate named. |
 
 ### T5 defects found and fixed while implementing
 
@@ -276,6 +276,7 @@ on a tree that violates it:
 | `check_legacy_ec_selftest.py` | The guard above having silently stopped matching — 17 cases, half of which must not match | found a `0x2F`/`0x2f` gap, a prefix bug, and a rule that could not fire at all |
 | `check_ecdiag_readonly.py` | The diagnostic reaching a write: an `#include` that opens the closure to `EcBus`, a write API or write-enabling call in the tool's own sources, or the runtime trace assertions having been deleted. 13-case self-test | validated by adding `#include "ec_protocol.h"` to `ecdiag.h` on purpose; the guard failed with the right rule and the file was restored from bytes read beforehand |
 | `check_project_sources.py` | A Windows project whose own `<ClCompile>` list is incomplete, will not compile, or names a file that is not there. 5-case self-test | its first run against the tree as it stood found four projects unable to link, and the missing-source case is one of its own self-test cases |
+| `check_dependencies.py` | The dependency record going stale: a recorded checksum or size that no longer matches the file, a dependency section missing one of the ten [SECURITY.md](SECURITY.md) §3 fields, or a tracked binary artefact with no checksum row. 8-case self-test | validated on the real tree by replacing the recorded TVicPort hash with zeros: the check failed naming the file, the recorded hash and the actual one. The record was restored from the bytes read beforehand |
 | `check_links.py` | A relative link or anchor in the documentation that does not resolve | run against the previous tree |
 | `check_ci_steps.py` | The portable steps of `ci/ci.yml` no longer working — it executes them locally | caught a suite that stopped linking because its fake source was wrong |
 
@@ -314,11 +315,18 @@ is recorded as awaiting CI evidence rather than as done.
   `--simulate` (an invented table). Its read-only guarantee is structural and is
   exercised against a real `EcBus` over a fake EC; it has not been exercised
   against hardware, and a hardware report cannot be produced by this tool until
-  T5-01 or T5-02 lands. See [ECDIAG.md](ECDIAG.md) §7.
+  T5-01 or T5-02 lands. See [ECDIAG.md](ECDIAG.md) §8.
 - A value read from an offset does not establish that the offset means what its
   candidate label says. `ecdiag` records raw bytes and refuses to summarise them
   into a temperature, an RPM or a fan state; correlation stays a human step
   ([HARDWARE_VERIFICATION.md](HARDWARE_VERIFICATION.md) §7).
+- **The x64 configurations cannot link the vendored import library.** Every COFF
+  member of `fancontrol/TVicPort.lib` is `pe-i386`, and the application project
+  references it in all four configurations. Until a 64-bit package is obtained
+  and recorded, `Debug|x64` and `Release|x64` are declared but not linkable
+  through this backend; the T1-01 build log decides whether the baseline stays
+  Win32-only or the vendor's 64-bit library arrives. See
+  [DEPENDENCIES.md](DEPENDENCIES.md) §4.4 and ADR-025.
 
 ---
 
@@ -473,6 +481,7 @@ policy questions rather than defects with an obvious correct answer.
 | Exact machine type unknown | Complete the Phase 0 identity report (T4-01, T4-02) | Open |
 | EC map unverified | Read-only hardware report (T4-07 … T4-12) | Open |
 | Backend/HVCI compatibility unknown | PawnIO spike (T5-02) and TVicPort load test (T4-06) | Open |
+| x64 application cannot link the vendored 32-bit TVicPort import library | Obtain and record the vendor's 64-bit package, or keep the baseline Win32-only; T1-01's build log is the evidence | Open |
 | Final T14 curve unknown | Collect telemetry after control validation | Open |
 | Sensor-agreement and failsafe-recovery policy | Product decision, ADR required (T2-12) | Open |
 

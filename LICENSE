@@ -25,16 +25,23 @@ Two bundled items are NOT covered by the dedication above, because they are
 third-party redistribution and cannot be relicensed by this project:
 
 1. **`fancontrol/TVicPort.lib`** — the import library for the TVicPort kernel
-   driver, by Pawel Król. It is redistributed unmodified under its own terms.
+   driver, by EnTech Taiwan (the attribution comes from the artefact's own
+   header and the vendor's site). It stays here for the legacy baseline build,
+   and its redistribution basis is recorded as **not established** in
+   `docs/DEPENDENCIES.md` §4: the vendor states that the free package is for
+   personal, non-commercial use, and that the right to redistribute the driver
+   comes with the commercial licence. Before redistributing this repository,
+   either obtain that licence or remove the file and have the user supply it.
    The driver itself is **not** included and must not be loaded without a
-   separate, explicit decision. See ADR-014 and `SECURITY.md` section 3.
+   separate, explicit decision. See ADR-025, `docs/DEPENDENCIES.md` and
+   `SECURITY.md` section 3.
 
 2. **Legacy `TPFCIcon/` and `TPFCIcon_noballons/` sources** — carried over from
    the upstream project under their original terms.
 
 Before redistributing this repository, re-check both items. See
-`docs/IMPLEMENTATION_CHECKLIST.md` task T0-07 and `SECURITY.md` section 3 for
-the full dependency record.
+`docs/IMPLEMENTATION_CHECKLIST.md` task T5-11, `docs/DEPENDENCIES.md` and
+`SECURITY.md` section 3 for the full dependency record.
 
 ## Safety notice
 
