@@ -162,6 +162,28 @@ public:
     void setFanSelectorWritesAllowed(bool allowed) noexcept;
     bool fanSelectorWritesAllowed() const noexcept;
 
+    // Whether writeRegister() may change a register at all. FALSE by default.
+    //
+    // This is the control barrier, and it belongs here rather than in a
+    // backend. An earlier version put it in LegacyBackend as makeReadOnly(),
+    // on the reasoning that a backend which cannot write cannot cause harm.
+    // That was wrong, and wrong in a way worth recording: the EC protocol
+    // writes a command byte to the status port even to READ, so EcBus rejects
+    // a backend that cannot write ports - and a "read-only" backend made every
+    // read fail, breaking monitor-only operation entirely. The barrier cannot
+    // be "no port writes"; it has to be "no REGISTER writes", and only the
+    // layer that knows which writes are register writes can enforce that.
+    //
+    // Reads are unaffected. That is the whole point: monitor-only operation
+    // must work on a machine where control has never been enabled.
+    //
+    // Deny by default rather than allow by default, so that the code which can
+    // change someone's fan is the code that has to be edited to do it. The
+    // application does not call this until Phase 0 verifies a machine; see
+    // ADR-023.
+    void setRegisterWritesAllowed(bool allowed) noexcept;
+    bool registerWritesAllowed() const noexcept;
+
     const EcBusConfig& config() const noexcept;
 
     // Every write this bus issued, in order, for evidence and for the T5-10
@@ -207,6 +229,7 @@ private:
     IClock& clock_;
     mutable std::mutex mutex_;
     bool fanSelectorWritesAllowed_ = false;
+    bool registerWritesAllowed_ = false;
     std::vector<BusWrite> writeTrace_;
     std::uint64_t timeoutCount_ = 0;
     std::uint64_t transactionCount_ = 0;

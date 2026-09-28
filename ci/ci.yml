@@ -55,13 +55,18 @@ jobs:
           for suite in core_tests ec_protocol_tests app_bridge_tests \
                        legacy_policy_tests legacy_backend_tests; do
             # core_tests uses the fake backend; the EC suites use the fake EC.
-            # legacy_policy_tests and legacy_backend_tests supply their own
-            # doubles inline, so they have no fake to compile in - and passing
-            # an empty source is clearer than passing a file they do not use.
+            # legacy_policy_tests supplies its own doubles inline and needs no
+            # fake. legacy_backend_tests does need fake_ec.cpp - for FakeClock,
+            # not for the bus - so it is deliberately not in the no-fake case.
+            #
+            # This table is the thing scripts/check_ci_steps.py exists for. It
+            # caught exactly this mistake: a suite that stopped linking because
+            # its fake was moved to /dev/null, in a step that would otherwise
+            # have failed four minutes into a CI run.
             case "$suite" in
-              core_tests)                            FAKE=tests/fake_backend.cpp ;;
-              legacy_policy_tests|legacy_backend_tests) FAKE=/dev/null ;;
-              *)                                     FAKE=tests/fake_ec.cpp ;;
+              core_tests)          FAKE=tests/fake_backend.cpp ;;
+              legacy_policy_tests) FAKE=/dev/null ;;
+              *)                   FAKE=tests/fake_ec.cpp ;;
             esac
             # ec_protocol_tests and app_bridge_tests use std::thread for the transaction
             # serialisation tests, so a threading library is linked in.
@@ -83,13 +88,18 @@ jobs:
           for suite in core_tests ec_protocol_tests app_bridge_tests \
                        legacy_policy_tests legacy_backend_tests; do
             # core_tests uses the fake backend; the EC suites use the fake EC.
-            # legacy_policy_tests and legacy_backend_tests supply their own
-            # doubles inline, so they have no fake to compile in - and passing
-            # an empty source is clearer than passing a file they do not use.
+            # legacy_policy_tests supplies its own doubles inline and needs no
+            # fake. legacy_backend_tests does need fake_ec.cpp - for FakeClock,
+            # not for the bus - so it is deliberately not in the no-fake case.
+            #
+            # This table is the thing scripts/check_ci_steps.py exists for. It
+            # caught exactly this mistake: a suite that stopped linking because
+            # its fake was moved to /dev/null, in a step that would otherwise
+            # have failed four minutes into a CI run.
             case "$suite" in
-              core_tests)                            FAKE=tests/fake_backend.cpp ;;
-              legacy_policy_tests|legacy_backend_tests) FAKE=/dev/null ;;
-              *)                                     FAKE=tests/fake_ec.cpp ;;
+              core_tests)          FAKE=tests/fake_backend.cpp ;;
+              legacy_policy_tests) FAKE=/dev/null ;;
+              *)                   FAKE=tests/fake_ec.cpp ;;
             esac
             "$CXX" -std=c++17 -O2 -DNDEBUG -Wall -Wextra -Werror -pedantic \
               -I fancontrol/core -I tests \

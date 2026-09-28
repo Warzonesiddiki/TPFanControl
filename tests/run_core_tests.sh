@@ -77,7 +77,9 @@ build_and_run legacy_policy_tests \
     "" \
     ""
 
+# Needs fake_ec.cpp for FakeClock, and -pthread: the fake and the bus both use
+# std::mutex, so the link needs a threading library.
 build_and_run legacy_backend_tests \
-    "$ROOT/tests/legacy_backend_tests.cpp" \
+    "$ROOT/tests/fake_ec.cpp $ROOT/tests/legacy_backend_tests.cpp" \
     "" \
-    ""
+    "-pthread"

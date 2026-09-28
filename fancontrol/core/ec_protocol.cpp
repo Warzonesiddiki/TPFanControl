@@ -135,6 +135,16 @@ void EcBus::setFanSelectorWritesAllowed(bool allowed) noexcept
     fanSelectorWritesAllowed_ = allowed;
 }
 
+void EcBus::setRegisterWritesAllowed(bool allowed) noexcept
+{
+    registerWritesAllowed_ = allowed;
+}
+
+bool EcBus::registerWritesAllowed() const noexcept
+{
+    return registerWritesAllowed_;
+}
+
 bool EcBus::fanSelectorWritesAllowed() const noexcept
 {
     return fanSelectorWritesAllowed_;
@@ -352,6 +362,19 @@ IoResult EcBus::writeRegister(std::uint8_t address, std::uint8_t value)
     const IoResult ready = checkPreconditions("write");
     if (!ready.ok) {
         return ready;
+    }
+
+    // The control barrier, enforced before the transaction is attempted and
+    // before the fan-selector refusal, so a caller that ignored the error has
+    // still touched nothing. Ordering matters for the same reason the selector
+    // refusal below does: after the first port write it would be too late, and
+    // the caller would already have stopped the fan.
+    if (!registerWritesAllowed_) {
+        return IoResult::failure(IoErrorCode::Unsupported,
+            "refusing to write EC register: register writes are not enabled on "
+            "this bus. Reads are unaffected, so monitor-only operation still "
+            "works. Enabling writes requires a Phase 0 hardware report for this "
+            "machine (ADR-023).");
     }
 
     // The single-fan refusal, enforced before the transaction is attempted.

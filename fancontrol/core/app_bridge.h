@@ -58,7 +58,17 @@ struct EcSnapshot {
 // Applying a command
 // ---------------------------------------------------------------------------
 struct ApplyResult {
-    bool attempted = false;         // the bus was touched at all
+    // The bridge TRIED to write. It does not mean the hardware was touched: a
+    // bus with register writes denied refuses before any port is written, and
+    // attempted is still true.
+    //
+    // The distinction matters and the comment used to get it wrong. "The bus was
+    // touched" is a claim about the machine; "the bridge tried" is a claim about
+    // the code. Only the second one can be answered from inside this process. If
+    // you need to know whether a register changed, ask the backend's trace -
+    // AppBridge deliberately keeps no record of its own, because a record it
+    // wrote about itself is not evidence.
+    bool attempted = false;
     bool succeeded = false;         // the write was accepted by the bus
     bool readbackAttempted = false;
     bool readbackMatched = false;   // only meaningful when readbackAttempted
@@ -78,6 +88,19 @@ struct BridgeConfig {
     // wrong length is not padded: a shifted name would label one reading with
     // another's name, which is worse than admitting the label is missing.
     std::vector<std::string> sensorNames;
+
+    // Whether this bridge's bus may change a register at all. FALSE by default.
+    //
+    // ADR-023. The application does not set this until Phase 0 verifies the
+    // machine, and leaving it false is what makes monitor-only operation work
+    // on a machine that has never been verified: reads are unaffected, and a
+    // write is refused by EcBus before any port is touched.
+    //
+    // It is a configuration field rather than a setter on the bridge because the
+    // bridge builds its own EcBus in its constructor and nothing should be able
+    // to flip the policy afterwards without that being visible in the
+    // configuration that produced it.
+    bool allowRegisterWrites = false;
 
     // The T14 profile is single-fan. There is deliberately no flag that turns
     // on a fan-selector write: the bridge has no code path that performs one,

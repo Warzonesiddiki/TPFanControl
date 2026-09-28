@@ -27,6 +27,16 @@ using core::EcBusConfig;
 using core::IoErrorCode;
 using core::IoResult;
 
+// ADR-023. Register writes are denied by default on a bus, so every test that
+// expects one has to say so. Making that a named call rather than a line
+// repeated twenty times means a reader can see at a glance which tests are
+// exercising a write, and a new test that forgets the opt-in fails loudly
+// rather than silently asserting the refusal.
+void makeWritable(EcBus& bus)
+{
+    bus.setRegisterWritesAllowed(true);
+}
+
 int testCount = 0;
 
 void noteTest()
@@ -196,6 +206,7 @@ void testWriteRegisterCommitsTheValue()
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
 
     const IoResult result = bus.writeRegister(0x05, 0x7E);
     CHECK(result.ok);
@@ -214,6 +225,7 @@ void testWriteTraceRecordsCommandAndData()
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
 
     CHECK(bus.writeTrace().empty());
     CHECK(bus.writeRegister(0x05, 0x7E).ok);
@@ -244,6 +256,7 @@ void testFanSelectorWriteIsRefusedBeforeAnyBackendCall()
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
 
     const IoResult result = bus.writeRegister(core::kFanSelectorRegister, 0x80);
     CHECK(!result.ok);
@@ -263,6 +276,7 @@ void testFanSelectorRefusalAppliesToEveryValue()
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
 
     for (int value = 0; value <= 0xFF; ++value) {
         const IoResult result =
@@ -310,6 +324,7 @@ void testFanSelectorIsNotRefusedForNeighbouringAddresses()
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
 
     CHECK(bus.writeRegister(0x0E, 0x01).ok);
     CHECK(bus.writeRegister(0x0F, 0x02).ok);
@@ -332,6 +347,7 @@ void testFanSelectorOptInIsReversibleAndActuallyWrites()
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
 
     CHECK(!bus.fanSelectorWritesAllowed());
     IoResult result = bus.writeRegister(core::kFanSelectorRegister, 0x7F);
@@ -368,6 +384,7 @@ void testEveryRegisterAddressIsAddressable()
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
 
     const std::uint8_t addresses[] = {0x00, 0x01, 0x0F, 0x10, 0x2F, 0x31, 0x78, 0x84, 0xC0, 0xFF};
     for (const std::uint8_t address : addresses) {
@@ -397,6 +414,7 @@ void testTheFullByteAddressRangeRoundTrips()
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
 
     for (int address = 0; address <= 0xFF; ++address) {
         const auto a = static_cast<std::uint8_t>(address);
@@ -422,6 +440,7 @@ void testTheWireSequenceIsCommandThenAddressThenValue()
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
 
     CHECK(bus.writeRegister(0x2F, 0x5B).ok);
 
@@ -541,6 +560,7 @@ void testWriteThatNeverCompletesTimesOut()
     backend.setFault(EcFault::WriteNeverCompletes);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
 
     const IoResult result = bus.writeRegister(0x05, 0x7E);
     CHECK(!result.ok);
@@ -713,6 +733,7 @@ void testAccessDeniedIsNotRetried()
     backend.setDenyWritesAtRuntime(true);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
 
     const IoResult result = bus.writeRegister(0x05, 0x7E);
     CHECK(!result.ok);
@@ -768,6 +789,7 @@ void testWriteFailureIsTyped()
     backend.setPersistentWriteFailure(true);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
 
     const IoResult result = bus.writeRegister(0x05, 0x7E);
     CHECK(!result.ok);
@@ -853,6 +875,7 @@ void testConcurrentWriteAndReadDoNotCorrupt()
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
 
     std::atomic<int> failures{0};
     std::thread writer([&bus, &failures]() {
@@ -890,6 +913,7 @@ void testSingleFanSequenceNeverTouchesFanSelector()
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
 
     std::uint8_t level = 0;
     CHECK(bus.writeRegister(0x04, 0x03).ok);
@@ -924,6 +948,7 @@ void testFanSelectorOptInIsNotReachableFromTheDefaultConstructedBus()
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
+    makeWritable(bus);
     CHECK(!bus.fanSelectorWritesAllowed());
     CHECK(!bus.writeRegister(core::kFanSelectorRegister, 0x80).ok);
 }

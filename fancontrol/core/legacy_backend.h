@@ -5,71 +5,87 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace tpfancontrol {
 namespace core {
 
 // ---------------------------------------------------------------------------
-// An IIoBackend over the legacy application's own EC primitives.
+// One call to the privileged I/O primitive, recorded for evidence.
 //
-// T3-02. The legacy application reaches the EC through
-// FANCONTROL::ReadByteFromEC and ::WriteByteToEC, which speak the two-phase
-// protocol directly against the I/O ports through the WinIO driver. Rather than
-// reimplement that (and end up with two implementations of the same protocol,
-// which is how they diverge), this class adapts it.
+// The trace is the point of this class. The EC transaction is a sequence of
+// port writes and reads, and a claim like "this cycle wrote nothing" is only
+// checkable if the calls are recorded. Without a trace, the only way to find
+// out what reached the hardware is to read the hardware.
+// ---------------------------------------------------------------------------
+struct PortCall {
+    bool isWrite = false;
+    std::uint16_t port = 0;
+    std::uint8_t value = 0;
+    bool ok = false;
+};
+
+// ---------------------------------------------------------------------------
+// An IIoBackend over the legacy driver's port primitives.
 //
-// Two consequences worth stating plainly:
+// T3-02. The legacy application reaches the EC through TVicPort's ReadPort and
+// WritePort, and `EcBus` speaks the two-phase protocol on top of those
+// (ADR-020). So this class is a PORT backend: it forwards port numbers
+// unchanged and interprets nothing.
 //
-//  - It is portable code. The privileged part is the two callbacks the caller
-//    supplies, so this class can be tested against fakes, which is what
-//    legacy_backend_tests.cpp does. The thing it adapts cannot be tested on a
-//    machine with no EC.
+// Why that distinction is load-bearing
+// ------------------------------------
+// The first version of this class took register offsets and handed them to
+// `FANCONTROL::ReadByteFromEC` / `WriteByteToEC`, which speak the whole
+// two-phase protocol themselves. It implemented `IIoBackend`, whose methods
+// take *ports*. So `EcBus` performed a transaction, and each of its port
+// operations started a second, nested transaction at the register level.
 //
-//  - It can be made read-only, and must be. Before Phase 0 a machine has no
-//    verified register map, so a backend that can write is a way to damage the
-//    embedded controller. A read-only backend fails every write with
-//    IoErrorCode::Unsupported, which the controller reports as a backend
-//    failure and therefore fails safe on.
+// The result would have been, for a single register read: EcBus writes 0x80 to
+// port 0x1604, and the legacy layer turns that into a full transaction writing
+// register 0x1604 & 0xFF = 0x04; EcBus writes 0x2F to port 0x1600, and the
+// legacy layer writes register 0x00. Two arbitrary EC registers, on every
+// read, on a machine whose register map is unverified.
+//
+// Nothing in the interface said so. Both layers type-checked, both layers were
+// individually correct, and the tests passed because the fake backend
+// implemented the same confusion. It was found by asking what number actually
+// reached the primitive, which is why `trace()` exists.
+//
+// There is now exactly one implementation of the EC protocol in this codebase,
+// and it is `EcBus`.
 // ---------------------------------------------------------------------------
 
-// The legacy primitives, as plain callables.
+// The driver's port primitives, as plain callables.
 //
-// Return conventions, chosen to match the legacy code rather than to be tidy:
-// a read returns true on success and fills `out`; a write returns true on
-// success. Anything else is a failure, and the adapter turns it into a typed
-// IoErrorCode rather than letting a bool travel any further.
-struct LegacyEcPrimitives {
-    std::function<bool(int offset, std::uint8_t& out)> readByte;
-    std::function<bool(int offset, std::uint8_t value)> writeByte;
+// A read returns true on success and fills `out`; a write returns true on
+// success. A false becomes a typed IoErrorCode at this boundary, so a boolean
+// does not travel further than it has to.
+struct LegacyPortPrimitives {
+    std::function<bool(std::uint16_t port, std::uint8_t& out)> readPort;
+    std::function<bool(std::uint16_t port, std::uint8_t value)> writePort;
 };
 
 class LegacyBackend final : public IIoBackend {
 public:
-    explicit LegacyBackend(LegacyEcPrimitives primitives);
+    explicit LegacyBackend(LegacyPortPrimitives primitives);
     ~LegacyBackend() override = default;
 
-    // Makes every write fail. This is the state a machine is in before Phase 0
-    // has verified its register map, and the state the application should be in
-    // on any machine that has not been verified.
-    //
-    // Idempotent, and not reversible from here on purpose: a class that can be
-    // read-only until someone flips a flag is a class whose safety depends on
-    // nobody flipping the flag.
-    void makeReadOnly() noexcept;
-    bool readOnly() const noexcept;
-
-    // Whether the underlying primitives are usable at all. The legacy
-    // application opens and closes the port driver over its lifetime, so a
-    // backend outliving the driver must report itself unavailable rather than
-    // call through a closed one.
+    // Whether the underlying primitives are usable at all. The application
+    // opens and closes the port driver over its lifetime, so a backend that
+    // outlives the driver must report itself unavailable rather than call
+    // through a closed one.
     void setDriverOpen(bool open) noexcept;
     bool driverOpen() const noexcept;
 
-    // Calls made so far. Used by tests, and by the trace, to make a claim like
-    // "this cycle wrote nothing" checkable rather than asserted.
+    // Every call made so far, in order. This is the evidence that a cycle
+    // touched the hardware, and it is the only way to verify the property this
+    // class was written to guarantee.
+    std::vector<PortCall> trace() const;
+    void clearTrace() noexcept;
+
     std::uint64_t readCount() const noexcept;
     std::uint64_t writeCount() const noexcept;
-    std::uint64_t refusedWriteCount() const noexcept;
 
     BackendState state() const noexcept override;
     BackendCapabilities capabilities() const override;
@@ -78,12 +94,11 @@ public:
     void close() noexcept override;
 
 private:
-    LegacyEcPrimitives primitives_;
-    bool readOnly_ = false;
+    LegacyPortPrimitives primitives_;
     bool driverOpen_ = false;
+    std::vector<PortCall> trace_;
     std::uint64_t readCount_ = 0;
     std::uint64_t writeCount_ = 0;
-    std::uint64_t refusedWriteCount_ = 0;
 };
 
 } // namespace core

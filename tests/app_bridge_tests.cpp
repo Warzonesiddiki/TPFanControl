@@ -87,6 +87,13 @@ BridgeConfig bridgeConfig()
     config.controller.rpmSupported = true;
     config.controller.manualMaximumLevel = 7;
     config.controller.sensor.maximumAgeMs = 1000;
+
+    // ADR-023: register writes are denied by default, so a suite that expects
+    // them has to say so. The tests that assert a write was refused deliberately
+    // clear this again, because their point is that the refusal happens even
+    // when writes are otherwise enabled - a different and stronger claim than
+    // "writes are off".
+    config.allowRegisterWrites = true;
     return config;
 }
 
@@ -765,6 +772,69 @@ void testPlausibleFanSpeedStillReportsHealthy()
     CHECK(output.fanHealth == core::FanHealth::Healthy);
 }
 
+// A bridge whose bus may not change a register must still read the EC. That is
+// what monitor-only operation IS, and it is the property the first version of
+// the write barrier broke: a "read-only backend" made every read fail, because
+// the EC protocol writes a command byte even to read.
+void testReadsWorkWithRegisterWritesDenied()
+{
+    noteTest();
+    BridgeConfig config = bridgeConfig();
+    config.allowRegisterWrites = false;
+
+    const core::EcBusConfig busConfig;
+    FakeEcBackend backend(busConfig);
+    loadHealthyMachine(backend);
+    FakeClock clock;
+    AppBridge bridge(backend, clock, config);
+
+    CHECK(!bridge.bus().registerWritesAllowed());
+    const EcSnapshot snapshot = bridge.read(1000);
+    CHECK(snapshot.ok);
+    CHECK(snapshot.lastError == core::IoErrorCode::None);
+    CHECK(snapshot.fanLevelRead);
+    CHECK(snapshot.fanSpeedRead);
+    CHECK(snapshot.temperatures.size() == core::kSensorCount);
+
+    // The honest claim is "no register changed", not "nothing was written": a
+    // read writes a command byte to the status port. Asserting the weaker thing
+    // would let a write slip through unnoticed.
+    CHECK(backend.writtenRegisters().empty());
+    CHECK(!backend.readLog().empty());
+}
+
+// An authorised command must still not reach the bus, and the refusal must say
+// why. Built from a command the controller really did authorise, so the refusal
+// is attributable to the write barrier rather than to the decision logic - a
+// test that refused for the wrong reason would still pass.
+void testApplyIsRefusedWhenRegisterWritesAreDenied()
+{
+    noteTest();
+    BridgeConfig config = bridgeConfig();
+    config.allowRegisterWrites = false;
+
+    const core::EcBusConfig busConfig;
+    FakeEcBackend backend(busConfig);
+    loadHealthyMachine(backend);
+    FakeClock clock;
+    AppBridge bridge(backend, clock, config);
+
+    const ControllerOutput output = bridge.cycle(1000, eligibleRequest());
+    CHECK(output.commandMayBeIssued);
+
+    backend.clearLogs();
+    const ApplyResult result = bridge.apply(output);
+    // attempted is true: the bridge tried. It is not a claim that the hardware
+    // was touched, and a bus that denies writes refuses before any port is
+    // written. The claim about the machine is the two assertions below.
+    CHECK(result.attempted);
+    CHECK(!result.succeeded);
+    CHECK(!result.reason.empty());
+    CHECK(result.write.error == core::IoErrorCode::Unsupported);
+    CHECK(backend.committedWrites().empty());
+    CHECK(backend.writtenRegisters().empty());
+}
+
 void testLegacyRpmCeilingIsCarriedForward()
 {
     noteTest();
@@ -914,6 +984,18 @@ void runAll()
     testMakeInputReportsMissingDataHonestly();
     testImplausibleFanSpeedIsNotTreatedAsHealthy();
     testPlausibleFanSpeedStillReportsHealthy();
+    // ---------------------------------------------------------------------
+    // ADR-023: the control barrier, end to end through the bridge.
+    //
+    // The fan-selector refusal is tested at the EcBus level in
+    // legacy_backend_tests, not here: AppBridge deliberately exposes no mutable
+    // handle to its bus, so a test could not ask it a question without going
+    // through apply(), and apply() never addresses 0x31 in the first place.
+    // ---------------------------------------------------------------------
+
+    testReadsWorkWithRegisterWritesDenied();
+    testApplyIsRefusedWhenRegisterWritesAreDenied();
+
     testLegacyRpmCeilingIsCarriedForward();
 
     // T3-07: UI text

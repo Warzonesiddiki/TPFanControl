@@ -389,11 +389,9 @@ FANCONTROL::SmartControl(void)
 //-------------------------------------------------------------------------
 // T3-01/T3-02: bring up the portable core against the open port driver
 //-------------------------------------------------------------------------
-// The backend wraps the application's own ReadByteFromEC and WriteByteToEC
-// rather than reimplementing the EC protocol. That is deliberate: a second
-// implementation of the same two-phase transaction is a second thing to get
-// wrong, and the legacy one is the only one with any evidence behind it
-// (ADR-020).
+// The backend wraps the driver's own port primitives, not the application's
+// register-level EC helpers. The EC protocol itself has exactly one
+// implementation in this codebase, and it is EcBus (ADR-020, ADR-023).
 bool
 FANCONTROL::CoreInit()
 {
@@ -405,42 +403,60 @@ FANCONTROL::CoreInit()
 	if (!::IsDriverOpened())
 		return false;		// monitor-only: nothing is opened, nothing is written
 
-	tpfancontrol::core::LegacyEcPrimitives primitives;
+	tpfancontrol::core::LegacyPortPrimitives primitives;
 
-	// The lambdas capture `this`, so the backend must not outlive it. It is a
-	// member of the same object and is destroyed in the same destructor, so
-	// that holds - but it is also why CoreShutdown exists: a bridge that
-	// outlived a driver close would call through a stale handle.
-	primitives.readByte = [this](int offset, std::uint8_t& out) -> bool {
-		char value = 0;
-		if (!this->ReadByteFromEC(offset, &value))
-			return false;
-		// char is signed on this platform, so a byte of 0x80 or above arrives
-		// negative. The cast is the explicit conversion the register map
-		// requires; without it every high byte would be corrupted.
-		out = (std::uint8_t)value;
+	// These are the driver's own port primitives - TVicPort's ReadPort and
+	// WritePort - and NOT FANCONTROL::ReadByteFromEC / WriteByteToEC.
+	//
+	// That distinction is the whole point of T3-02. ReadByteFromEC speaks the
+	// complete two-phase EC protocol itself, and EcBus speaks it too. Passing a
+	// register-offset API into a port-level backend makes every EcBus operation
+	// start a second, nested transaction, and a single register read ends up
+	// writing registers 0x04 and 0x00 on a machine whose register map is
+	// unverified. An earlier version of this file did exactly that.
+	//
+	// There is now one implementation of the protocol, in EcBus, and this is the
+	// layer beneath it. See ADR-023.
+	primitives.readPort = [](std::uint16_t port, std::uint8_t& out) -> bool {
+		// ReadPort returns UCHAR, which is unsigned on this platform, so there is
+		// no signed-char round trip here. The core does the narrowing and widening
+		// explicitly; this layer only moves bytes.
+		out = ::ReadPort(port);
 		return true;
 		};
 
-	primitives.writeByte = [this](int offset, std::uint8_t value) -> bool {
-		return this->WriteByteToEC(offset, (char)value) != 0;
-		};
+	primitives.writePort = [](std::uint16_t port, std::uint8_t value) -> bool {
+		::WritePort(port, value);
+		return true;
+	};
 
 	CoreBackend.reset(new tpfancontrol::core::LegacyBackend(primitives));
 	CoreBackend->setDriverOpen(true);
 
-	// T3-09 / ADR-007 and the Phase 0 obligations. Control is not enabled
-	// because this machine has not been verified. The backend is read-only
-	// until a Phase 0 hardware report says otherwise, and the capability
-	// report built from this will report every Phase 0 verdict as unverified,
-	// so the controller will refuse control even if something else asks for it.
+	// T3-09 / ADR-007 and the Phase 0 obligations.
 	//
-	// This is the one line that has to change when a machine is verified, and
-	// it is here rather than in a settings file so that enabling control is a
-	// visible, reviewable edit in the same commit as the verification.
-	CoreBackend->makeReadOnly();
+	// T3-04: the bridge is built with allowRegisterWrites left at its default of
+	// false, and CoreHardwareVerified is false, so every Phase 0 verdict in the
+	// capability report is "unverified" and the controller will refuse control
+	// even if something else asks for it. On top of that, EcBus refuses a
+	// register write outright, before any port is touched.
+	//
+	// There is deliberately no line here that calls
+	// setRegisterWritesAllowed(true). It is not commented out, and not set from a
+	// configuration file. It does not exist. Adding it is a source change, made in
+	// the same commit as the hardware report that justifies it, where a reviewer
+	// sees it.
+	//
+	// An earlier version of this function instead called
+	// CoreBackend->makeReadOnly(). That was wrong: the EC protocol writes a
+	// command byte to the status port even to READ, so a backend refusing port
+	// writes made every read fail and monitor-only operation was broken. The
+	// barrier belongs at the register level, which is where it is now.
 
 	tpfancontrol::core::BridgeConfig bridgeConfig;
+	// Stated rather than left at the default, because the default is the safety
+	// property and a reader should not have to know that.
+	bridgeConfig.allowRegisterWrites = false;
 	bridgeConfig.singleFanProfile = true;
 	bridgeConfig.requireAllSensors = true;
 	// The tachometer is not yet enabled: the 0x1FFF ceiling the legacy

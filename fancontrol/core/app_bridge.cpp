@@ -21,6 +21,11 @@ AppBridge::AppBridge(IIoBackend& backend, IClock& clock, BridgeConfig config)
     , bus_(backend, EcBusConfig(), clock)
     , controller_(config_.controller)
 {
+    // ADR-023. Applied from the configuration in the constructor and not
+    // afterwards, so the bus's write policy is always exactly what the
+    // configuration said. There is no method to flip it later.
+    bus_.setRegisterWritesAllowed(config_.allowRegisterWrites);
+
     // A sensor-name list of the wrong length would shift every label by one and
     // present one reading under another's name, so it is validated once, here,
     // rather than clamped at the point of use.
