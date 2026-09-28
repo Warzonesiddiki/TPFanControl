@@ -102,3 +102,12 @@ When documents disagree, use this order:
 6. community reports and assumptions.
 
 Community reports are useful leads, not proof of hardware compatibility.
+
+## Governance
+
+- [`../LICENSE`](../LICENSE) — public domain dedication, with named third-party exceptions
+- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — the contribution contract and safety rules
+- [`IMPLEMENTATION_CHECKLIST.md`](IMPLEMENTATION_CHECKLIST.md) — the taskboard and the only
+  document that tracks what is actually done
+- [`DECISIONS.md`](DECISIONS.md) — architecture decision records
+- [`SAFETY.md`](SAFETY.md) — safety requirements and the open-gap table

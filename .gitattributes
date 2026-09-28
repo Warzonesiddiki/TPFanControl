@@ -1,2 +1,101 @@
-# Auto detect text files and perform LF normalization
+# TPFanControl line-ending and binary policy.
+#
+# The previous content was only "* text=auto", which relies on git guessing. This file
+# states the policy explicitly: sources and scripts are text with predictable line
+# endings, and every binary artifact is declared binary so no checkout can corrupt it.
+#
+# See docs/IMPLEMENTATION_CHECKLIST.md tasks T0-05 and T0-06.
+
+# ---------------------------------------------------------------------------
+# Default
+# ---------------------------------------------------------------------------
 * text=auto
+
+# ---------------------------------------------------------------------------
+# Sources, scripts, and documentation
+# ---------------------------------------------------------------------------
+*.c      text eol=lf
+*.cc     text eol=lf
+*.cpp    text eol=lf
+*.cxx    text eol=lf
+*.h      text eol=lf
+*.hpp    text eol=lf
+*.hxx    text eol=lf
+*.inl    text eol=lf
+
+# Shell scripts must be LF on every platform. A CRLF .sh fails on POSIX shells;
+# run_core_tests.sh is invoked directly by contributors and by CI.
+*.sh     text eol=lf
+*.bash   text eol=lf
+
+*.md     text eol=lf
+*.txt    text eol=lf
+*.ini    text eol=lf
+*.cfg    text eol=lf
+*.cmake  text eol=lf
+CMakeLists.txt text eol=lf
+
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.json   text eol=lf
+*.py     text eol=lf
+
+# Windows batch files must be CRLF; cmd.exe mishandles LF-only batch files.
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+*.ps1    text eol=crlf
+
+# Visual Studio project and resource files. CRLF is conventional and MSBuild is
+# tolerant, but the two encodings must never be mixed within a checkout.
+*.sln        text eol=crlf
+*.vcxproj    text eol=crlf
+*.vcproj     text eol=crlf
+*.filters    text eol=crlf
+*.rc         text eol=crlf
+*.rc2        text eol=crlf
+# *.manifest is deliberately absent from the binary list below: a manifest is
+# XML text, and declaring it binary here would both contradict the CRLF rule
+# above and stop git from normalising it.
+*.pal        text eol=crlf
+
+# ---------------------------------------------------------------------------
+# Binaries - declared explicitly so no checkout or merge can corrupt them.
+# Most of these are also gitignored; the declaration is defence in depth for the
+# cases where a file is intentionally committed.
+# ---------------------------------------------------------------------------
+*.exe   binary
+*.dll   binary
+*.lib   binary
+*.obj   binary
+*.pdb   binary
+*.ipch  binary
+*.ilk   binary
+*.idb   binary
+*.tlog  binary
+*.suo   binary
+*.exp   binary
+*.res   binary
+*.tlb   binary
+
+*.ico   binary
+*.bmp   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.icns  binary
+*.svg   text eol=lf
+
+*.cab   binary
+*.msi   binary
+*.msix  binary
+*.appx  binary
+*.pfx   binary
+*.p12   binary
+*.cer   binary
+*.der   binary
+*.key   binary
+
+# Visual Studio databases
+*.VC.db   binary
+*.VC.opendb binary

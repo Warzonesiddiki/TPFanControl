@@ -112,4 +112,74 @@ Profile eligibility alone does not start fan control. An explicit activation req
 
 **Consequence:** A new build defaults to BIOS/automatic or monitor-only behavior, and a temporary temperature drop cannot silently restart control after a fault.
 
-**Consequence:** They are Phase 7 enhancements, not MVP requirements.
+## ADR-015 — Optional enhancements are not MVP requirements
+
+**Status:** Accepted
+
+Named profiles, a graphical curve editor, foreground-application policies,
+acoustic tuning, trend warnings, a local API surface, a split privileged and
+unprivileged process model, extra machine profiles, extra backends, power-mode
+integration, history graphs, and configuration rollback are all Phase 7
+enhancements. They are not MVP requirements, and none of them establishes safe
+EC access.
+
+**Consequence:** They are Phase 7 enhancements, not MVP requirements. Starting
+one before the T14 single-fan path is verified on hardware adds complexity
+without reducing the project's actual risk. See ADR-012.
+
+## ADR-016 — Generated build artifacts are not distributed from this repository
+
+**Status:** Accepted
+
+The repository does not publish a prebuilt `TPFanControl.exe`. A binary built
+here is specifically the artifact that writes to an Embedded Controller, and
+distributing one invites someone to run an unqualified build on real hardware.
+Reviewers should not be asked to reverse-engineer a shipped binary to check the
+safety changes.
+
+**Consequence.** When a binary is needed for a hardware test session, it is
+built from a recorded commit and attached to a
+[test report](templates/TEST_REPORT.md) with its commit id and build
+configuration, never committed or released. See T0-01 … T0-05 and
+[BUILD.md](BUILD.md) section 10.
+
+## ADR-017 — Do not rewrite Git history
+
+**Status:** Accepted (T0-09)
+
+**Context.** The repository as inherited contained roughly 66 tracked build
+artifacts (`.ipch`, `.VC.db`, `.pdb`, `.suo`, `.obj`), a tracked
+`fancontrol.exe` built with `Active=2`, which is smart mode and therefore
+**writes to the EC**, and committed runtime logs containing a real Windows user
+name. The project's own `SECURITY.md`, `BUILD.md` and `TESTING.md` each forbid
+exactly this.
+
+**Decision.** Do not rewrite history. Instead:
+
+1. `.gitignore` and `git rm --cached` remove all of it going forward (T0-01 … T0-05).
+2. The README no longer advertises the prebuilt binary, and states that it must not be
+   used (ADR-016).
+3. The committed logs are removed from the index. The files remain on the contributor's
+   working copy, because they are local state and destroying it serves no purpose.
+
+**Reasons.** The leaked data is a Windows user name in 2018-era logs, not a credential, a
+serial number, or a token; it does not grant access to anything. The binaries are inert
+without a kernel driver that the project deliberately does not ship. The ongoing cost of
+a rewrite — broken clones, lost attribution, diverged forks — exceeds the ongoing cost of
+the exposure for every plausible reader of a public fan-control fork.
+
+**Consequence.** Anyone who cloned before 2026-09-27 still has the artifacts in their local
+history, and a Windows user name from 2018 remains retrievable via `git log`. This is
+accepted, not overlooked.
+
+**Revisit conditions.** Rewrite history if any of the following becomes true:
+
+- the repository is made private, or a credential, token, or serial number is found in
+  history;
+- the project is forked into a distribution where third-party binaries in `master` create a
+  real supply-chain path;
+- a security review under `SECURITY.md` §8 judges the exposure material.
+
+If any condition holds, use `git filter-repo --path fancontrol/.vs --path fancontrol/Debug
+--path fancontrol/Release --path fancontrol/ipch --invert-paths` and coordinate with
+anyone holding a clone.
