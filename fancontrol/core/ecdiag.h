@@ -173,6 +173,11 @@ struct EcDiagOptions {
     // machine can read as well as in prose.
     bool simulated = false;
 
+    // True when the caller only wants the plan and the configuration recorded.
+    // No reader is called, so a plan-only report cannot be mistaken for a
+    // measurement: the outcome is PlanOnly and the sample count is zero.
+    bool planOnly = false;
+
     // UTC timestamp for the report, "YYYY-MM-DDTHH:MM:SSZ". Empty means the
     // caller did not supply one and the report carries null.
     std::string generatedUtc;
@@ -251,6 +256,11 @@ enum class EcDiagOutcome {
     // exit code so a script can tell them apart.
     BackendUnavailable,
 
+    // The plan was printed without performing any read. Distinct from Ok,
+    // because "the plan is well-formed" and "the plan was executed" are
+    // different answers and a report must not be able to blur them.
+    PlanOnly,
+
     // The plan or the configuration is unusable, so nothing was read.
     ConfigInvalid,
 
@@ -315,10 +325,11 @@ EcDiagRun runDiagnostic(IRegisterReader& reader, const EcDiagPlan& plan,
 // ---------------------------------------------------------------------------
 
 // The process exit code for an outcome, from the table in
-// docs/CLI_DIAGNOSTICS.md section 3. Codes 5, 7 and 8 are unreachable by
-// design: ecdiag has no control path to gate (5), no failsafe state (7) and no
-// export step (8). That is stated rather than left for a reader to wonder
-// about.
+// docs/CLI_DIAGNOSTICS.md section 3. Codes 5 and 7 are unreachable by design:
+// ecdiag has no control path to gate (5) and no failsafe state to report (7).
+// That is stated rather than left for a reader to wonder about. Code 8
+// (diagnostic export failed) belongs to the command-line front end, which is
+// the only layer that knows about an output file.
 int exitCodeFor(EcDiagOutcome outcome) noexcept;
 
 const char* toText(EcDiagOutcome outcome) noexcept;

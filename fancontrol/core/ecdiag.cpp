@@ -337,6 +337,17 @@ EcDiagRun runDiagnostic(IRegisterReader& reader, const EcDiagPlan& plan,
         return run;
     }
 
+    // A plan-only run returns before the loop below, so no reader is ever
+    // called. The audit is left empty rather than zeroed out into something
+    // that looks like a completed measurement of nothing.
+    if (options.planOnly) {
+        run.outcome = EcDiagOutcome::PlanOnly;
+        run.limitations.push_back(
+            "No read was performed. This report records the plan and the configuration "
+            "that a run would use; it contains no measurement.");
+        return run;
+    }
+
     const bool timed = static_cast<bool>(options.nowMs);
 
     for (const EcDiagTarget& target : plan.targets) {
@@ -527,12 +538,10 @@ EcDiagRun runDiagnostic(IRegisterReader& reader, const EcDiagPlan& plan,
             "a command byte to the status port even to read (ADR-023), so a backend that "
             "cannot write ports cannot read either.");
     }
-    if (run.simulated) {
-        run.limitations.push_back(
-            "No register write path exists in this tool: it is handed an interface with a "
-            "single read operation, and the report above is a cross-check against that "
-            "interface's own audit rather than against a second implementation.");
-    }
+    run.limitations.push_back(
+        "No register write path exists in this tool: it is handed an interface with a "
+        "single read operation. The read-only line above is a cross-check of that "
+        "interface's own audit, not a second implementation of it.");
 
     return run;
 }
@@ -553,6 +562,8 @@ int exitCodeFor(EcDiagOutcome outcome) noexcept
     case EcDiagOutcome::NoReadSucceeded:
     case EcDiagOutcome::PartialReadFailure:
         return 6;
+    case EcDiagOutcome::PlanOnly:
+        return 0;
     case EcDiagOutcome::InvariantViolated:
         // Not 6: this is not a problem with the data, it is a problem with the
         // tool. A script must be able to tell "the EC did not answer" from "the
@@ -566,6 +577,7 @@ const char* toText(EcDiagOutcome outcome) noexcept
 {
     switch (outcome) {
     case EcDiagOutcome::Ok:                 return "ok";
+    case EcDiagOutcome::PlanOnly:           return "plan_only";
     case EcDiagOutcome::PartialReadFailure: return "partial_read_failure";
     case EcDiagOutcome::NoReadSucceeded:    return "no_read_succeeded";
     case EcDiagOutcome::BackendUnavailable: return "backend_unavailable";
@@ -614,13 +626,19 @@ std::string toJson(const EcDiagRun& run)
     out += "    \"purpose\": \"read-only embedded-controller diagnostic; performs no register writes\"\n";
     out += "  },\n";
 
+    std::string grade = "hardware";
+    std::string notEvidence;
+    if (run.outcome == EcDiagOutcome::PlanOnly) {
+        grade = "plan-only";
+        notEvidence = "no read was performed, so there is nothing to be evidence of";
+    } else if (run.simulated) {
+        grade = "simulated";
+        notEvidence = "the values were produced by a simulated reader, not read from hardware";
+    }
+
     out += "  \"evidence\": {\n";
-    out += "    \"grade\": " + std::string(run.simulated ? "\"simulated\"" : "\"hardware\"") + ",\n";
-    out += "    \"not_evidence_reason\": "
-        + (run.simulated
-               ? quoteJson("the values were produced by a simulated reader, not read from hardware")
-               : std::string("null"))
-        + "\n";
+    out += "    \"grade\": " + quoteJson(grade) + ",\n";
+    out += "    \"not_evidence_reason\": " + jsonStringOrNull(!notEvidence.empty(), notEvidence) + "\n";
     out += "  },\n";
 
     out += "  \"outcome\": " + quoteJson(toText(run.outcome)) + ",\n";
@@ -767,7 +785,10 @@ std::string toTextReport(const EcDiagRun& run)
         + ecDiagBuildFlavour() + " build)\n";
     out += "generated: "
         + (run.hasGeneratedUtc ? run.generatedUtc : std::string("not recorded")) + "\n";
-    if (run.simulated) {
+    if (run.outcome == EcDiagOutcome::PlanOnly) {
+        out += "MODE: PLAN ONLY - no read was performed and this report holds no "
+               "measurement\n";
+    } else if (run.simulated) {
         out += "MODE: SIMULATED - the values below were not read from hardware and are "
                "not evidence\n";
     } else {
@@ -792,32 +813,43 @@ std::string toTextReport(const EcDiagRun& run)
         + ", attempts " + std::to_string(run.config.maximumAttempts) + "\n";
     out += "        source: " + run.configSource + " (unverified candidate encoding)\n\n";
 
-    out += padRight("address", 9) + padRight("candidate meaning", 56)
-        + padRight("values", 22) + "stable\n";
+    out += padRight("address", 9) + padRight("candidate meaning", 62)
+        + padRight("values", 18) + "stable\n";
 
-    for (const EcDiagTargetResult& result : run.results) {
-        std::string values;
-        if (!result.anySucceeded()) {
-            values = "no reading";
-        } else if (result.stable()) {
-            values = hexByte(result.minimumValue) + " x" + std::to_string(result.successCount());
-        } else {
-            values = std::to_string(result.distinctValues()) + " distinct /"
-                + std::to_string(result.samples.size());
+    // The table is driven by the plan, not by the results, so a plan-only run
+    // still shows what it would read. A report whose table is empty because no
+    // read happened would be a worse report than one that says "not read".
+    for (std::size_t index = 0; index < run.plan.targets.size(); ++index) {
+        const EcDiagTarget& target = run.plan.targets[index];
+        const EcDiagTargetResult* result =
+            index < run.results.size() ? &run.results[index] : nullptr;
+
+        std::string values = "not read";
+        std::string stable = "not read";
+        if (result != nullptr) {
+            if (!result->anySucceeded()) {
+                values = "no reading";
+            } else if (result->stable()) {
+                values = hexByte(result->minimumValue) + " x"
+                    + std::to_string(result->successCount());
+            } else {
+                values = std::to_string(result->distinctValues()) + " distinct /"
+                    + std::to_string(result->samples.size());
+            }
+            if (result->stable()) {
+                stable = "yes";
+            } else if (!result->anySucceeded() && result->hasError) {
+                stable = std::string(toText(result->firstError));
+            } else if (!result->allSucceeded()) {
+                stable = "partial";
+            } else {
+                stable = "unstable";
+            }
         }
-        std::string stable = "no";
-        if (result.stable()) {
-            stable = "yes";
-        } else if (!result.anySucceeded() && result.hasError) {
-            stable = std::string(toText(result.firstError));
-        } else if (!result.allSucceeded()) {
-            stable = "partial";
-        } else {
-            stable = "unstable";
-        }
-        out += padRight(hexByte(result.target.address), 9)
-            + padRight(result.target.label, 56)
-            + padRight(values, 22) + stable + "\n";
+
+        out += padRight(hexByte(target.address), 9)
+            + padRight(target.label, 62)
+            + padRight(values, 18) + stable + "\n";
     }
 
     out += "\naudit: " + std::to_string(run.audit.readsIssued) + " read(s) received by the reader, "

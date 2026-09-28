@@ -1319,6 +1319,7 @@ void testExitCodesMatchTheDocumentedTable()
     // step; that is a fact about the tool worth pinning rather than leaving to
     // a reader to work out.
     CHECK(core::exitCodeFor(EcDiagOutcome::Ok) == 0);
+    CHECK(core::exitCodeFor(EcDiagOutcome::PlanOnly) == 0);
     CHECK(core::exitCodeFor(EcDiagOutcome::ConfigInvalid) == 3);
     CHECK(core::exitCodeFor(EcDiagOutcome::BackendUnavailable) == 4);
     CHECK(core::exitCodeFor(EcDiagOutcome::NoReadSucceeded) == 6);
@@ -1376,6 +1377,47 @@ void testEveryReportStatesWhatTheToolDoesNotProve()
     }
     CHECK(correlationStated);
     CHECK(meaningNotEstablished);
+}
+
+void testPlanOnlyRunReadsNothingAndSaysSo()
+{
+    noteTest();
+    EcDiagOptions options = baseOptions(testConfig());
+    options.planOnly = true;
+
+    ScriptedReader reader;
+    // A reader that would answer every call. If a plan-only run touched it, the
+    // count below would show it.
+    reader.setValue(0x2F, 0x80);
+
+    const EcDiagRun run = core::runDiagnostic(reader, candidatePlan(3), options);
+
+    CHECK(run.outcome == EcDiagOutcome::PlanOnly);
+    CHECK(core::exitCodeFor(run.outcome) == 0);
+    CHECK(run.audit.readsIssued == 0u);          // the reader was never called
+    CHECK(run.results.empty());
+    CHECK(run.totalSamples == 0u);
+    CHECK(run.successfulSamples == 0u);
+    CHECK(run.invariantFailures.empty());        // not a failure: nothing was attempted
+    CHECK(run.readOnlyInvariantHeld());
+    // The plan is still reported, which is the whole point of the mode.
+    CHECK(run.plan.targets.size() == 16u);
+
+    const JsonValue json = mustParseJson(core::toJson(run));
+    CHECK(memberOf(json, "outcome").text == "plan_only");
+    CHECK(memberOf(memberOf(json, "evidence"), "grade").text == "plan-only");
+    CHECK(!memberOf(memberOf(json, "evidence"), "not_evidence_reason").isNull());
+    CHECK(memberOf(memberOf(json, "plan"), "targets").items.size() == 16u);
+    CHECK(memberOf(memberOf(json, "summary"), "samples").asInteger() == 0);
+
+    bool explained = false;
+    for (const std::string& limitation : run.limitations) {
+        if (limitation.find("No read was performed") != std::string::npos) {
+            explained = true;
+        }
+    }
+    CHECK(explained);
+    CHECK(core::toTextReport(run).find("PLAN ONLY") != std::string::npos);
 }
 
 void testDefaultConfigurationIsRecordedAsUnverified()
@@ -1444,13 +1486,14 @@ void runAll()
     testExitCodesMatchTheDocumentedTable();
     testTextReportStatesTheOutcomeAndTheConfig();
     testEveryReportStatesWhatTheToolDoesNotProve();
+    testPlanOnlyRunReadsNothingAndSaysSo();
     testDefaultConfigurationIsRecordedAsUnverified();
 }
 
 // The suite fails if it runs fewer tests than it declares. "The tests pass" and
 // "the tests ran" are different claims, and a suite that silently shrank to
 // zero tests would satisfy the first without the second.
-const int kExpectedTests = 28;
+const int kExpectedTests = 29;
 
 } // namespace
 } // namespace test

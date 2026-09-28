@@ -1,15 +1,18 @@
 #!/usr/bin/env sh
 # Portable test runner for the TPFanControl core.
 #
-# Builds and runs ALL SIX portable suites:
-#   core_tests         - controller, curves, sensor validation, fan health
-#   ec_protocol_tests  - EC bus timeouts, retry policy, the 0x31 refusal
-#   app_bridge_tests   - the seam with the legacy application: no fan command
-#                        without core approval, and never a 0x31 write
+# Builds and runs every portable suite, and builds the ecdiag tool:
+#   core_tests          - controller, curves, sensor validation, fan health
+#   ec_protocol_tests   - EC bus timeouts, retry policy, the 0x31 refusal
+#   app_bridge_tests    - the seam with the legacy application: no fan command
+#                         without core approval, and never a 0x31 write
+#   ecdiag_tests        - the read-only diagnostic: a full run through a real
+#                         bus writes no register, and the report is JSON that a
+#                         strict parser accepts
 #   legacy_policy_tests - translating the legacy UI's intent into a controller
-#                        request, including the refusal to address one fan
+#                         request, including the refusal to address one fan
 #   legacy_backend_tests- the EC access policy, including the read-only state
-#                        an unverified machine is held in
+#                         an unverified machine is held in
 #
 # This is the suite CI runs on every push, and the one a contributor can run
 # without Visual Studio. It is not a substitute for the Windows build: see
@@ -93,3 +96,49 @@ build_and_run legacy_backend_tests \
     "$ROOT/tests/fake_ec.cpp $ROOT/tests/legacy_backend_tests.cpp" \
     "" \
     "-pthread"
+
+# ---------------------------------------------------------------------------
+# The ecdiag command-line tool (T5-09)
+# ---------------------------------------------------------------------------
+# Built and run here so it is compiled on every CI leg, on all three platforms,
+# rather than only on the machine that happened to write it. What this checks is
+# that the front end builds and behaves: the modes run, and each one returns the
+# exit code its own documentation promises. Whether the JSON is well formed is
+# checked by tests/ecdiag_tests.cpp, which carries a strict parser and a
+# self-test proving that parser rejects what is not JSON; a shell check here
+# would be a weaker duplicate of that.
+ECDIAG="$BUILD_DIR/ecdiag"
+# shellcheck disable=SC2086
+"$CXX" $CORE_COMMON -I "$ROOT/tools/ecdiag" \
+    $CORE_SOURCES \
+    "$ROOT/tools/ecdiag/simulated_ec.cpp" "$ROOT/tools/ecdiag/main.cpp" \
+    -o "$ECDIAG" \
+    -pthread
+
+"$ECDIAG" --version
+"$ECDIAG" --list-candidates >/dev/null
+
+# The default mode records the plan and reads nothing.
+"$ECDIAG" --plan --quiet --output "$BUILD_DIR/ecdiag-plan.json" --force
+
+# The simulated mode exercises the whole pipeline against an invented table.
+"$ECDIAG" --simulate --json >"$BUILD_DIR/ecdiag-simulated.json"
+
+# Exit codes, from docs/CLI_DIAGNOSTICS.md section 3. set +e because these
+# commands are supposed to fail, and the number they fail with is the assertion.
+check_exit_code() {
+    _want=$1
+    shift
+    set +e
+    "$@" >/dev/null 2>&1
+    _got=$?
+    set -e
+    if [ "$_got" -ne "$_want" ]; then
+        echo "ecdiag: expected exit $_want, got $_got: $*" >&2
+        exit 1
+    fi
+}
+check_exit_code 4 "$ECDIAG" --backend tvicport
+check_exit_code 2 "$ECDIAG" --not-an-option
+check_exit_code 3 "$ECDIAG" --status-port 0x1600 --data-port 0x1600
+echo "TPFanControl ecdiag tool: modes run and exit codes match the documented table"
