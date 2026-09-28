@@ -1,4 +1,4 @@
-# Testing strategy
+﻿# Testing strategy
 
 ## 1. Testing principles
 
@@ -56,7 +56,49 @@ Prove that every failure path:
 
 ## 3. Portable-core and feature tests
 
-The first portable core is implemented under `fancontrol/core/` and exercised by `tests/core_tests.cpp`. The hardware-independent core must be testable on a developer machine without Windows headers or a low-level driver. Cover:
+The hardware-independent core lives under `fancontrol/core/` and is exercised by **two**
+suites, both hardware-free and both buildable without Windows headers or a driver:
+
+| Suite | Source | Tests | Covers |
+|---|---|---|---|
+| `core_tests` | `tests/core_tests.cpp` | 11 | curves, sensor validation, stuck/stale sources, controller gates, safety states, fan health, RPM plausibility |
+| `ec_protocol_tests` | `tests/ec_protocol_tests.cpp` | 39 | `EcBus` transactions, IBF/OBF waits, timeouts, retry policy, the `0x31` refusal, transaction serialisation |
+
+Both are built and run by `tests/run_core_tests.sh`, which is the single entry point
+used by CI on Linux, macOS and Windows. On Windows the same two suites also build as
+`tests/core_tests.vcxproj` and `tests/ec_protocol_tests.vcxproj` in all four
+configurations, under `/W4 /WX /permissive- /EHsc`.
+
+### 3.1 Assertions must survive `NDEBUG`
+
+Tests use the `CHECK` macro from `tests/test_check.h`, **not** `assert`.
+
+`assert` is removed by `NDEBUG`, which Release defines. A suite written with `assert`
+therefore runs zero checks in the Release configuration that CI actually builds, and
+still exits 0 — it reports success while testing nothing. It also breaks `/W4 /WX`,
+because variables referenced only inside assertions become unused.
+
+`CHECK` has no conditional compilation. CI builds and runs both suites a second time
+with `-O2 -DNDEBUG` specifically to prove the assertions are still live. The
+difference was verified directly rather than assumed: under `-DNDEBUG`, a deliberately
+failing `CHECK` aborts with exit 134, and the same condition in an `assert` exits 0.
+
+### 3.2 Assertions must be against evidence, not intent
+
+Where a test needs to know what reached the hardware, it must read a record of what
+actually happened, not what the code intended. The EC fake maintains two logs
+deliberately:
+
+- `writeLog()` — every write **attempted**;
+- `committedWrites()` — writes that actually **took effect**.
+
+Asserting against the wrong one produces a test that passes while proving nothing. A
+write that times out may still have changed the register (the EC received the byte but
+never released it), so `testWriteThatNeverCompletesTimesOut` asserts the register *did*
+change while the transaction *did* fail. Conflating those would be the easiest way to
+make this suite lie.
+
+Cover:
 
 - curve validation and boundary evaluation;
 - hysteresis and dwell timing with an injected clock;
@@ -68,6 +110,24 @@ The first portable core is implemented under `fancontrol/core/` and exercised by
 - diagnostic redaction and bounded telemetry behavior.
 
 No portable-core test may issue a real port I/O operation.
+
+### 3.3 What the EC suite does not prove
+
+The fake models a conventional 0x62/0x66-style EC closely enough to exercise
+`EcBus`, and it is the only thing standing between the code and the hardware. It does
+**not** prove:
+
+- that the real machine uses these ports or this command encoding. Both are
+  **placeholders**; see [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §3 and §9. Phase 0 must
+  measure them read-only before any write is attempted;
+- that the 4-bit address field is wide enough. The placeholder encoding reaches only
+  `0x00`–`0x0F`, while the register map includes `0x31`, so the encoding is
+  demonstrably too narrow for the real map. `EcBus` refuses an address that does not
+  fit rather than truncating it, so the shortfall surfaces as an error instead of a
+  wrong-register write;
+- anything about a real EC's timing, arbitration, or behaviour under concurrent
+  access from the legacy application's own thread (`EcBus`'s mutex covers only
+  `EcBus` users — that is T3-06).
 
 ## 4. Static and build checks
 

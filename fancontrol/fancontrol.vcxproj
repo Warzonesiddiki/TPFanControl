@@ -342,6 +342,16 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <AdditionalOptions>/permissive- /EHsc /utf-8</AdditionalOptions>
     </ClCompile>
+    <ClCompile Include="core\ec_protocol.cpp">
+      <!-- T5: the EC transaction layer. Same /W4 /WX treatment as the rest
+           of the core, for the same reason: this is the code that decides
+           whether a register write is issued, so a warning here is a
+           safety signal, not a style note. -->
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <AdditionalOptions>/permissive- /EHsc /utf-8</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="core\io_backend.cpp">
       <!-- T1-04: new portable code is held to /W4 as errors.
            /utf-8 is safe here because core sources are pure ASCII, so the
@@ -369,6 +379,7 @@
     <ClInclude Include="core\fan_curve.h" />
     <ClInclude Include="core\controller.h" />
     <ClInclude Include="core\io_backend.h" />
+    <ClInclude Include="core\ec_protocol.h" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="res\app.ico" />

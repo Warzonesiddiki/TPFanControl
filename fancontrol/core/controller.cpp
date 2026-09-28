@@ -1,5 +1,7 @@
 ﻿#include "controller.h"
 
+#include "sensor_validation.h"
+
 namespace tpfancontrol {
 namespace core {
 
@@ -126,11 +128,22 @@ FanHealth Controller::evaluateFanHealth(
         return FanHealth::Unknown;
     }
 
-    if (input.fanRpm < 0) {
-        return FanHealth::Suspect;
+    // A reading that cannot be a real measurement is rejected before any
+    // comparison against the commanded level, so a mis-scaled value cannot be
+    // reported as a healthy fan. SAFETY.md 6.1.
+    const ValidatedFanRpm rpm = validateFanRpm(
+        input.hasFanRpm, input.fanRpm, input.timestampMs, input.nowMs, config_.fanRpm);
+
+    if (!rpm.valid) {
+        // Missing is the absence of information, not a fault. An implausible
+        // value is a fault in the measurement path.
+        if (rpm.validity == SensorValidity::Missing) {
+            return FanHealth::Unknown;
+        }
+        return FanHealth::Failed;
     }
 
-    if (command.kind == CommandKind::Level && command.level > 0 && input.fanRpm == 0) {
+    if (command.kind == CommandKind::Level && command.level > 0 && rpm.rpm == 0) {
         return FanHealth::Suspect;
     }
 

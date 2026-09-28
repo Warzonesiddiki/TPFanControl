@@ -21,8 +21,8 @@ Legend:
 | Measure | Value |
 |---|---|
 | Documented safety gaps closed | 6 of 10 (gaps 1, 2, 3, 4, 5, 8) |
-| Portable-core test functions | 20 core + 25 backend/EC |
-| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run |
+| Portable-core test functions | 11 core + 39 backend/EC = 50, 270 `CHECK` assertions |
+| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5 6 of 11: 05, 06, 07, 08, 10 complete; 04 in progress; 02 blocked |
 | Critical path | T0 → T1 → T5 → T3 → T4 → T6 → T8 |
 | Biggest single risk | The portable core is not connected to the application. It is compiled by the project and tested, but no legacy file includes a core header, so the safety state machine is dead code that can drift from shipped behaviour indefinitely without any signal. |
 
@@ -154,12 +154,12 @@ would imply a capability the project does not have.
 | T5-02 | PawnIO feasibility spike on a disposable Windows install ([DRIVER_BACKENDS.md](DRIVER_BACKENDS.md) §4) | `[!]` | Genuinely blocked: needs a disposable Windows install, a driver download, and an HVCI-capable machine. No substitute evidence is acceptable. |
 | T5-03 | Record backend signature and HVCI result | `[ ]` | Blocked behind T5-02. The matrix location exists and is empty. |
 | T5-04 | Monitor-only behavior when the backend is absent | `[-]` | The core already refuses to command without a ready backend (`testCapabilityAndFailureGates`, plus `testBackendNotReadyRefusesBeforeTouchingHardware`). The application-level path is wired in T3. |
-| T5-05 | Typed EC protocol layer with IBF/OBF waits, bounded timeouts, retries | `[x]` | `core/ec_protocol.{h,cpp}`. Waits bounded by deadline **and** a derived poll ceiling, so a frozen clock still terminates (`testFrozenClockStillTerminates`). Typed errors preserved across retries (`testPersistentWriteFailureStopsAndKeepsType`). Insane config refused. Nine tests. |
-| T5-06 | Fake-backend fault injection: one failed read, repeated failed reads, one failed write, wrong readback, mutex contention, backend shutdown mid-command ([TESTING.md](TESTING.md) §7) | `[x]` | `tests/fake_ec.{h,cpp}` plus eight tests. The contention test runs 4 threads x 200 transactions and the fake rejects any interleaved data-port read. |
-| T5-07 | Stuck temperature and stale timestamp fault injection | `[x]` | Three tests. **Documented limitation:** a uniformly stuck sensor set cannot be detected without a second source, so the tests assert the invariant that matters — a stuck source cannot mask a high reading from another — and do not claim a detection that does not exist. |
-| T5-08 | Impossible RPM fault injection | `[x]` | Fixed a real defect: `evaluateFanHealth` reported **Healthy** for 65535 RPM. Added `validateFanRpm` with plausibility bounds, sentinel handling (`0xFFFF`, `0x8000`; **0 excluded** so a stopped fan stays distinguishable), and freshness. Two tests. |
+| T5-05 | Typed EC protocol layer with IBF/OBF waits, bounded timeouts, retries | `[x]` | `core/ec_protocol.{h,cpp}`. Waits bounded by deadline **and** a derived poll ceiling, so a frozen clock still terminates (`testWaitTerminatesEvenWhenTheClockNeverAdvances`); the ceiling itself is pinned to an exact poll count (`testPollCountIsBoundedPerAttempt`) so it cannot quietly grow. Typed errors preserved across retries (`testPersistentFailureIsRetriedOnlyToTheLimit`). Insane config refused. **22 tests.** |
+| T5-06 | Fake-backend fault injection: one failed read, repeated failed reads, one failed write, wrong readback, mutex contention, backend shutdown mid-command ([TESTING.md](TESTING.md) §7) | `[x]` | `tests/fake_ec.{h,cpp}`. Transient vs. persistent failures are modelled separately (`testTransientFailureIsRetried`, `testPersistentFailureIsRetriedOnlyToTheLimit`); a backend that passes the capability probe and then denies the write is a distinct mode (`testAccessDeniedIsNotRetried`), because otherwise `AccessDenied` is unreachable. Shutdown mid-transaction is `testBackendStoppingMidTransactionIsReported`. The contention tests run 4 reader threads plus a concurrent writer, and the fake rejects any interleaved data-port read; verified clean under ThreadSanitizer. |
+| T5-07 | Stuck temperature and stale timestamp fault injection | `[x]` | `testStuckTemperatureSource` models a source whose value freezes while its timestamps keep advancing, so a freshness check cannot catch it. **Documented limitation, asserted rather than glossed over:** a uniformly stuck sensor set is not detectable from a single reading stream. What the tests do pin is the invariant that does hold — a stuck source can neither mask a hotter source nor hold the aggregate down, because the aggregate is a maximum over sources. `testStaleAndFutureTimestampsAreRejected` checks the age and skew limits on **both** sides of each boundary, since an off-by-one boundary is an untested boundary. |
+| T5-08 | Impossible RPM fault injection | `[x]` | Fixed a real defect: `evaluateFanHealth` reported **Healthy** for 65535 RPM — the one answer that must never be reported for a value that cannot be a measurement. Added `validateFanRpm` (`FanRpmPolicy`, `ValidatedFanRpm`) with plausibility bounds, sentinel handling (`0xFFFF`, `0x8000`; **0 excluded** so a stopped fan stays distinguishable), and freshness; `ControllerInput::timestampMs` carries when the reading was taken. `testImplausibleRpmIsNotReportedHealthy` pins all five rejection classes and then asserts a plausible reading still returns `Healthy`, so the fix is not just "report `Failed` for everything". |
 | T5-09 | Read-only `ecdiag` tool | `[ ]` | Not started. Depends on a backend; the EC layer it would use is now available. |
-| T5-10 | Prove the single-fan path never writes `0x31` | `[x]` | `EcBus::writeRegister` refuses `0x31` **before touching any port**. The opt-in `setFanSelectorWritesAllowed` is **never called anywhere in the tree**, so the single-fan path cannot unlock it by accident — verified by grep, not inspection. Three tests assert against the recorded write trace and the fake's committed-write log, not against intent. |
+| T5-10 | Prove the single-fan path never writes `0x31` | `[x]` | `EcBus::writeRegister` refuses `0x31` **before touching any port** (`testFanSelectorWriteIsRefusedBeforeAnyBackendCall` asserts `backend.operationCount() == 0`, not merely that the call returned an error). The refusal is checked against **all 256** values, because a rule that only catches the value the code happens to use is not a rule. `setFanSelectorWritesAllowed` is **never called anywhere in product code** — verified by grep over `*.cpp`/`*.h` excluding `tests/`, which finds only the declaration and the definition. Assertions are made against the bus's own write trace and the fake's committed-write log, never against intent. |
 | T5-11 | Dependency record per [SECURITY.md](SECURITY.md) §3: source, license, version, signature, architecture, uninstall, redistribution | `[ ]` | Not started. |
 
 ### T5 defects found and fixed while implementing
@@ -177,17 +177,62 @@ Found by the tests, not by reading the code:
 - **"Attempted" was recorded as "written."** The fake logged a write before checking
   whether it succeeded, so the T5-10 trace evidence would have overstated what reached
   the EC. Committed writes are recorded separately.
+- **Out-of-range register addresses were silently aliased.** The command byte carries
+  a 4-bit address, and the bus masked with `address & 0x0F`. A write to register `0x2A`
+  was therefore accepted and issued as a write to register `0x0A` — a *different
+  register*, with no error reported. On a bus where the wrong register can stop a fan,
+  that is worse than a refusal. An address that does not fit the encoding is now
+  rejected with `Unsupported` before any port is touched
+  (`testAddressOutsideTheEncodingIsRefusedNotTruncated`).
+- **`WriteFailure` was the one retryable error that was never retried.** A failure of
+  the *command* write returned immediately, while an identical failure of a status read
+  was retried. That inconsistency is exactly what hides a transient backend fault, so
+  the command write now follows the same policy as every other step.
+- **The write trace recorded address `0` for every command.** The T5-10 check walks the
+  trace looking for `0x31`; a trace whose address field is always zero would have made
+  that check pass vacuously. The encoded address is now recorded.
 - **`assert` is compiled out under `NDEBUG`.** A Release test build would have run no
   assertions at all while still appearing to pass, and the values used only inside
   assertions became unused, breaking `/W4 /WX`. Tests now use `CHECK`, which has no
-  conditional compilation. See `tests/test_check.h`.
+  conditional compilation. See `tests/test_check.h`. This was verified directly, not
+  assumed: the same failing condition aborts under `-DNDEBUG` with `CHECK` and exits 0
+  with `assert`.
+
+The last two items are the reason the fake records *committed* writes separately from
+*attempted* ones. A log that records the attempt as the outcome would have made all four
+of these look like passing tests.
+
+### T5 verification actually performed
+
+Run locally on Linux with g++ (no MSBuild, Visual Studio or Windows in this
+environment). Every configuration below was executed, not inferred:
+
+| Configuration | `core_tests` | `ec_protocol_tests` |
+|---|---|---|
+| `-Wall -Wextra -Werror -pedantic` | 11 pass | 39 pass |
+| `-O2 -DNDEBUG` | 11 pass | 39 pass |
+| `-fsanitize=address,undefined` | 11 pass | 39 pass |
+| `-fsanitize=thread` | 11 pass | 39 pass |
+
+`tests/run_core_tests.sh` builds and runs both suites and is the single entry point
+used by CI. The Windows build (four configurations, `/W4 /WX`, MSVC `/analyze`) is
+**not** verified here — no Windows toolchain exists in this environment — and is
+recorded as awaiting CI evidence rather than as done.
 
 ### T5 limitations, stated rather than papered over
 
 - The EC port mapping and command encoding are **candidate values**, not hardware
   facts. Phase 0 must establish them by read-only measurement before any write is
   attempted. See [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §3 and §9.
-- A uniformly stuck sensor set is **not detectable** from a single source.
+- **The placeholder encoding cannot address the real register map.** The address field
+  is 4 bits, so only `0x00`–`0x0F` are addressable — but the register map includes
+  `0x31`. This is a further, independent reason the encoding must be measured rather
+  than assumed: the current one is not merely unverified, it is demonstrably too narrow
+  for the job. The bus refuses unencodable addresses rather than truncating them, so
+  the shortfall is a visible error and not a wrong-register write.
+- A uniformly stuck sensor set is **not detectable** from a single source. The tests
+  assert this limitation directly rather than working around it, and pin the property
+  that does hold: one stuck source cannot mask or mask-out a differing source.
 - The `EcBus` mutex is the portable equivalent of the EC access mutex in
   [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §5 step 1. It does **not** serialise against
   the legacy application's own thread — that is T3-06.
@@ -323,7 +368,7 @@ passing portable test.
 | 6 | §4 at least three consecutive samples agree sufficiently | **Open** — a single oscillating sensor can still pump the fan. Blocked on T2-12 |
 | 7 | §6.3 cooldown/acknowledgement recovery | **Open** — the latch is permanent for the process lifetime. Blocked on T2-12 |
 | 8 | [PROFILES.md](PROFILES.md) §4 curve rules | **Closed** — minimum point count and first-point ceiling |
-| 9 | §6.1 impossible RPM or tachometer behaviour → `Failed` | **Partly closed (T5-08)** — implausible, sentinel and stale readings are rejected. **Open:** there is still no repeated-suspect escalation rule |
+| 9 | §6.1 impossible RPM or tachometer behaviour → `Failed` | **Partly closed (T5-08)** — implausible, sentinel, stale and future-dated readings are all rejected, and `evaluateFanHealth` now reports `Failed` for every one of them instead of `Healthy`. **Open:** there is still no repeated-suspect escalation rule, and a uniformly stuck sensor set remains undetectable from a single reading stream |
 | 10 | §11 log each fan command and readback result | **Open** — the portable core has no logging. Blocked on T2-13 |
 
 Six of ten are closed, and all six were hardware-independent. Gaps 6, 7 and 9 are

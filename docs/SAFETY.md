@@ -1,4 +1,4 @@
-# Safety model
+﻿# Safety model
 
 ## 1. Scope
 
@@ -94,6 +94,42 @@ Failsafe behavior:
 6. remain in monitor-only mode.
 
 Do not automatically return from failsafe until readings are valid for a configured cooldown period. The portable controller additionally latches emergency/failsafe decisions so that a temporary temperature drop cannot silently re-enable control. A future recovery flow may require explicit user acknowledgement and a fresh startup-validation sequence.
+
+### 6.1 What "impossible RPM or tachometer behavior" means in practice
+
+The trigger above is only meaningful if an impossible tachometer reading can be told
+apart from a real one. The portable core implements this as `validateFanRpm`
+(`fancontrol/core/sensor_validation.cpp`), and `evaluateFanHealth` consults it before
+any comparison against the commanded level. A reading is rejected when it is:
+
+- **negative** — no unsigned register can produce this, so it is a sign or widening
+  error;
+- **a sentinel** (`0xFFFF`, `0x8000`) — these mean "no measurement" on some firmware.
+  **`0` is deliberately not a sentinel**: a stopped fan genuinely reads 0 RPM, and
+  conflating the two would hide the exact condition this section exists to catch;
+- **above the plausible maximum** — the signature of a raw register byte pair read as
+  unsigned without scaling, which is what a mis-mapped tachometer looks like;
+- **stale or future-dated** — an old or unaged reading is not evidence about the fan
+  right now.
+
+Anything rejected makes `evaluateFanHealth` return `Failed`, not `Suspect` and
+certainly not `Healthy`. This was a real defect: before T5-08 the function returned
+`Healthy` for 65535 RPM, which is the one answer that must never be produced for a
+value that cannot be a measurement.
+
+The plausibility bounds are **candidate values, not hardware evidence**. They exist to
+reject sentinels and sign errors, not to describe any particular machine. Phase 0 must
+derive the real range from the target hardware before control is enabled.
+
+**What this does not cover, stated plainly.** A *uniformly* stuck sensor set — every
+source frozen at the same plausible value — is **not detectable** from a single reading
+stream. Freshness checks cannot see it, because a stuck source can keep advancing its
+timestamps. What the code does guarantee is the weaker property that a single stuck
+source can neither mask a hotter source nor hold the aggregate reading down, because
+the aggregate is a maximum over sources rather than a reading of any one source. This
+is asserted in `testStuckTemperatureSource` rather than left to inference. Closing the
+gap entirely requires an independent second source or a repeated-suspect escalation
+rule, which is task T2-04 and remains open.
 
 ## 7. Manual mode restrictions
 

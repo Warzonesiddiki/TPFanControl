@@ -90,6 +90,32 @@ struct ValidatedTemperature {
     std::string reason;
 };
 
+// Tachometer readings get the same treatment as temperatures, for the same
+// reason: a raw EC byte read as unsigned is plausible-looking garbage, and an
+// impossible reading must be rejected rather than reported as a healthy fan.
+struct FanRpmPolicy {
+    // CANDIDATE VALUES, not verified evidence. A ThinkPad cooling fan tops out
+    // far below 12000 RPM; the bound exists to reject sentinels and sign errors,
+    // not to describe a particular machine. Phase 0 must derive the real range.
+    int minimumPlausible = 0;
+    int maximumPlausible = 12000;
+
+    // Raw values that mean "no measurement" on some firmware rather than a
+    // measurement. 0 is deliberately absent: a stopped fan genuinely reads 0,
+    // and conflating the two would hide a stopped fan.
+    std::uint16_t sentinelValues[2] = {0xFFFF, 0x8000};
+
+    std::uint64_t maximumAgeMs = 5000;
+    std::uint64_t maximumFutureSkewMs = 1000;
+};
+
+struct ValidatedFanRpm {
+    bool valid = false;
+    int rpm = 0;
+    SensorValidity validity = SensorValidity::Missing;
+    std::string reason;
+};
+
 struct SensorPolicy {
     int minimumPlausibleC = -40;
     int maximumPlausibleC = 125;

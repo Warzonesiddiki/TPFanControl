@@ -1,7 +1,8 @@
-name: CI
+﻿name: CI
 
 # Tasks covered:
 #   T1-08  portable core tests on Linux, macOS and Windows
+#           (both suites: core_tests and ec_protocol_tests)
 #   T1-09  Release build with warnings-as-errors on the core
 #   T1-10  git diff --check and a link check
 #   T1-11  Windows test target
@@ -56,14 +57,37 @@ jobs:
             else
               FAKE=tests/fake_ec.cpp
             fi
+            # ec_protocol_tests uses std::thread for the transaction
+            # serialisation tests, so a threading library is linked in.
             "$CXX" -std=c++17 -Wall -Wextra -Werror -pedantic \
               -fsanitize=address,undefined -fno-omit-frame-pointer -g \
-              -I fancontrol/core \
+              -I fancontrol/core -I tests \
               fancontrol/core/*.cpp \
               "$FAKE" \
               "tests/$suite.cpp" \
-              -o "$BUILD_DIR/${suite}_san"
+              -o "$BUILD_DIR/${suite}_san" \
+              -pthread
             "$BUILD_DIR/${suite}_san"
+          done
+
+          # NDEBUG must not silently disable the assertions. Release defines it,
+          # and an assert-based suite built with NDEBUG runs zero checks and
+          # still exits 0, so this is verified rather than assumed.
+          # See tests/test_check.h.
+          for suite in core_tests ec_protocol_tests; do
+            if [ "$suite" = core_tests ]; then
+              FAKE=tests/fake_backend.cpp
+            else
+              FAKE=tests/fake_ec.cpp
+            fi
+            "$CXX" -std=c++17 -O2 -DNDEBUG -Wall -Wextra -Werror -pedantic \
+              -I fancontrol/core -I tests \
+              fancontrol/core/*.cpp \
+              "$FAKE" \
+              "tests/$suite.cpp" \
+              -o "$BUILD_DIR/${suite}_ndebug" \
+              -pthread
+            "$BUILD_DIR/${suite}_ndebug"
           done
 
   # ---------------------------------------------------------------- T1-11 ----
@@ -98,7 +122,9 @@ jobs:
       # baseline is clean (task T1-05).
       - name: Run Windows test target
         shell: cmd
-        run: out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\core_tests.exe
+        run: |
+          out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\core_tests.exe
+          out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\ec_protocol_tests.exe
 
       - name: Upload build log
         if: always()
@@ -116,9 +142,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: microsoft/setup-msbuild@v2
 
-      - name: Build Release test target with warnings-as-errors
+      - name: Build Release test targets with warnings-as-errors
         run: >
-          msbuild tests\core_tests.vcxproj
+          msbuild tests\core_tests.vcxproj tests\ec_protocol_tests.vcxproj
           /m
           /p:Configuration=Release
           /p:Platform=x64
@@ -130,7 +156,9 @@ jobs:
 
       - name: Run tests
         shell: cmd
-        run: out\tests\x64\Release\core_tests.exe
+        run: |
+          out\tests\x64\Release\core_tests.exe
+          out\tests\x64\Release\ec_protocol_tests.exe
 
       - name: Confirm the core really was compiled with /W4 and /WX
         # Guards against the flag silently not being applied, which would make
@@ -139,7 +167,7 @@ jobs:
         shell: pwsh
         run: |
           $log = Get-Content build-core-wx.log -Raw
-          $coreUnits = @('core_types', 'sensor_validation', 'fan_curve', 'controller', 'io_backend')
+          $coreUnits = @('core_types', 'sensor_validation', 'fan_curve', 'controller', 'io_backend', 'ec_protocol')
           $fail = @()
           foreach ($u in $coreUnits) {
             $lines = $log -split "`r?`n" | Where-Object { $_ -match "$u\.cpp" -and $_ -match '\bcl\.exe\b|compiler' }
@@ -228,7 +256,7 @@ jobs:
 
       - name: Analyse the core
         run: >
-          msbuild tests/core_tests.vcxproj
+          msbuild tests/core_tests.vcxproj tests/ec_protocol_tests.vcxproj
           /p:Configuration=Release
           /p:Platform=x64
           /p:RunCodeAnalysis=true

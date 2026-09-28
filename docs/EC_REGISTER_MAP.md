@@ -1,4 +1,4 @@
-# EC register map and verification policy
+﻿# EC register map and verification policy
 
 **Status:** Candidate map only; not a release hardware map
 **Target:** T14 Gen 1 Intel
@@ -40,6 +40,33 @@ EcPortStatus=unverified
 ```
 
 `0x0000` means “not approved”; it must prevent control from starting.
+
+### 3.1 The command encoding in `core/ec_protocol.h` is a placeholder, not a claim
+
+`fancontrol/core/ec_protocol.h` defines a default `EcBusConfig` so the EC layer is
+well-defined and testable before any hardware has been measured. Those defaults
+(`statusPort` `0x62`, `dataPort` `0x66`, read base `0x80`, write base `0xC0`) are
+**placeholders chosen to be well-formed, not values believed to be correct for any
+machine.** They are not hardware evidence, they are not a recommendation, and they
+must be replaced by measurement during Phase 0 before a single write is issued.
+
+Two properties of the placeholder are worth recording because they are the kind of
+thing that silently becomes load-bearing:
+
+- **The command bases must differ in their high nibble.** An earlier draft used
+  `0x10`/`0x11`, which differ only in a low bit. That makes reading register 1 and
+  writing register 0 emit the same byte, so the layer cannot tell a read from a write.
+  It was caught by a test, not by inspection. `EcBusConfig` now refuses an ambiguous
+  encoding and names the colliding register.
+- **A 4-bit address field is too narrow for this register map.** The address occupies
+  the low nibble of the command byte, so the placeholder can address only `0x00`–`0x0F`,
+  while the map in §2 includes `0x31`. The current code therefore **refuses** an address
+  that does not fit rather than masking it — masking would turn a write to `0x2A` into a
+  silent write to `0x0A`, a different register, with no error reported.
+
+The second point is a concrete demonstration that the placeholder is inadequate rather
+than merely unverified. Treat any default in `EcBusConfig` as something to be measured
+and replaced, never as a starting point for probing the hardware.
 
 ## 4. Fan command semantics
 
@@ -120,3 +147,21 @@ Any change to a verified register map requires:
 - a regression test;
 - a documented rollback;
 - review by a second person before release.
+
+### 9.1 Phase 0 obligations created by T5
+
+`core/ec_protocol.h` ships with placeholder defaults. Before any control path may be
+enabled, Phase 0 must establish by **read-only** measurement:
+
+| Must be measured | Currently | Why it cannot be guessed |
+|---|---|---|
+| status and data ports | `0x62` / `0x66` | §3 documents two competing mappings, `0x62`/`0x66` and `0x1600`/`0x1604` |
+| IBF/OBF status bit positions | `0x02` / `0x01` | not recorded as verified anywhere in the legacy source |
+| read command encoding | base `0x80`, 4-bit address | demonstrably too narrow — cannot reach `0x31` |
+| write command encoding | base `0xC0`, 4-bit address | as above, and it is the path that moves hardware |
+| timeout and poll budget | 50 ms / 1 ms | a bound that is too long delays failsafe; too short causes spurious fallbacks |
+
+None of these may be probed by writing to an unknown register. The legacy application
+already contains the defect recorded in §10 — an unconditional write to the fan-selector
+register — and repeating that pattern during discovery is exactly what this project
+exists to avoid. T3-11 must not reintroduce it.

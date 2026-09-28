@@ -24,8 +24,8 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{7C2D5B41-9A6E-4F30-B0D8-3E51A9C74F62}</ProjectGuid>
-    <RootNamespace>core_tests</RootNamespace>
+    <ProjectGuid>{2F8B6D14-73C5-4E09-9B21-A6D4C0C5E318}</ProjectGuid>
+    <RootNamespace>ec_protocol_tests</RootNamespace>
     <Keyword>Win32Proj</Keyword>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -164,22 +164,18 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="core_tests.cpp" />
-    <ClCompile Include="fake_backend.cpp" />
+    <ClCompile Include="ec_protocol_tests.cpp" />
+    <ClCompile Include="fake_ec.cpp" />
     <ClCompile Include="..\fancontrol\core\core_types.cpp" />
-    <ClCompile Include="..\fancontrol\core\sensor_validation.cpp" />
-    <ClCompile Include="..\fancontrol\core\fan_curve.cpp" />
-    <ClCompile Include="..\fancontrol\core\controller.cpp" />
     <ClCompile Include="..\fancontrol\core\io_backend.cpp" />
+    <ClCompile Include="..\fancontrol\core\ec_protocol.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="fake_backend.h" />
+    <ClInclude Include="fake_ec.h" />
     <ClInclude Include="test_check.h" />
     <ClInclude Include="..\fancontrol\core\core_types.h" />
-    <ClInclude Include="..\fancontrol\core\sensor_validation.h" />
-    <ClInclude Include="..\fancontrol\core\fan_curve.h" />
-    <ClInclude Include="..\fancontrol\core\controller.h" />
     <ClInclude Include="..\fancontrol\core\io_backend.h" />
+    <ClInclude Include="..\fancontrol\core\ec_protocol.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="run_core_tests.sh" />

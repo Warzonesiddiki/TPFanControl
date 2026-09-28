@@ -29,6 +29,10 @@ struct ControllerConfig {
     int manualMaximumLevel = 7;
     int emergencyTemperatureC = 0;
     bool rpmSupported = false;
+
+    // Plausibility bounds for tachometer readings. Only consulted when
+    // rpmSupported is true. See FanRpmPolicy: these are candidate values.
+    FanRpmPolicy fanRpm;
 };
 
 struct ControllerInput {
@@ -51,6 +55,11 @@ struct ControllerInput {
     bool hasFanRpm = false;
     int fanRpm = 0;
     bool rpmObservationElapsed = false;
+
+    // When the tachometer reading was taken. A reading with no timestamp cannot
+    // be shown to be fresh, and an unaged reading is exactly what a stuck or
+    // replayed sample looks like, so it is required before the value is trusted.
+    std::uint64_t timestampMs = 0;
 };
 
 struct ControllerOutput {

@@ -241,3 +241,56 @@ scope for T1.
 **Revisit conditions.** Revisit if the project moves to `CharacterSet=Unicode`,
 at which point `/utf-8` becomes correct for the legacy sources too and this ADR
 should be superseded.
+
+## ADR-019 — Refuse an unencodable EC register address instead of truncating it
+
+**Status.** Accepted, T5.
+
+**Context.** `core/ec_protocol.h` needs a command encoding before any hardware has
+been measured, so that the EC layer is testable at all. The placeholder used is
+`command byte = base | address`, with a 4-bit address field.
+
+That immediately raises the question of what to do with an address that does not
+fit. The first implementation masked it:
+
+```cpp
+writeCommand(static_cast<std::uint8_t>(config_.writeCommandBase | (address & 0x0F)));
+```
+
+The mask is what such code usually looks like, and a test written to check "a write
+to 0x2A succeeds" passes cleanly. What it actually does is issue a write to
+register `0x0A`.
+
+**Decision.** An address that does not fit the encoding is **rejected** with
+`IoErrorCode::Unsupported`, before any port is touched, and the message names the
+constraint. No masking anywhere in the EC path.
+
+**Alternatives considered.**
+
+1. *Keep the mask, and widen the encoding later when the real one is known.* Rejected:
+   the masking behaviour would still be live during Phase 0, which is exactly the
+   window in which a wrong register is most likely to be written by mistake.
+2. *Throw or assert.* Rejected: this runs in a monitoring process that must not
+   terminate. A typed, reportable error is the correct failure mode.
+3. *Widen the placeholder to 8 bits so it "fits".* Rejected: it would make the
+   placeholder look adequate when it is a guess, and would still be wrong in whatever
+   way the real encoding turns out to be wrong. The honest position is that the
+   placeholder is too narrow, and that should be visible.
+
+**Consequences.**
+
+- The layer cannot address the real register map, which includes `0x31`. This is
+  recorded as a T5 limitation and as a Phase 0 obligation in
+  [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §9.1, because it is a concrete
+  demonstration that the placeholder is inadequate, not merely unverified.
+- The `0x31` write refusal now has a second, independent reason to exist. The
+  profile rule is still the primary one and is still checked first, but even a
+  dual-fan profile that opts in cannot silently write the wrong register.
+- `testAddressOutsideTheEncodingIsRefusedNotTruncated` pins the behaviour, and
+  `testFanSelectorOptInRemovesTheProfileRuleButNotTheEncodingLimit` pins that the
+  two gates stay distinguishable — a refusal that is diagnosed by its message
+  cannot be checked by a test that only sees "it failed".
+
+**Revisit conditions.** Superseded by ADR-020 when Phase 0 measures the real
+command encoding, at which point `addressFits` should be replaced by the
+encoding's real address width rather than retained as a fixed 4-bit constant.
