@@ -52,28 +52,46 @@ Control may start only when all conditions are true:
 
 If any condition fails, remain in `MONITOR_ONLY`.
 
-### 4.1 Control is also unreachable at the I/O layer
+### 4.1 Control is also unreachable at the bus
 
 The startup gate is a decision, and a decision can be coded wrong. There is a
 second, independent barrier below it.
 
-`LegacyBackend`, the only `IIoBackend` the application uses, is constructed
-**read-only**. There is no `makeWritable()`; the one call that makes it read-only
-cannot be undone through the object's public surface (ADR-022). In that state
-every write returns `IoErrorCode::Unsupported` with a message saying the register
-map has not been verified on this machine — not `NotInitialized`, because the
-driver is not the reason, and sending a user to hunt a driver problem that does
-not exist is its own small failure.
+`EcBus` refuses a **register** write unless `setRegisterWritesAllowed(true)` has
+been called, and it refuses before the transaction is attempted and before any
+port is touched. The call is not made anywhere in the application: it is not
+commented out, and not read from a configuration file. It does not exist.
 
-The read-only backend reports `BackendState::Ready`, not `Faulted`. It does
+Reads are entirely unaffected. That is the point of the distinction, and getting
+it wrong is what an earlier version of this project did.
+
+> An earlier version put this barrier on the *backend*, as
+> `LegacyBackend::makeReadOnly()`, and claimed in this document that a
+> read-only backend "does everything monitor-only operation needs". That was
+> false. The EC protocol writes a command byte to the status port even to READ,
+> so `EcBus` rejects a backend that cannot write ports — and a read-only backend
+> made **every read fail**. The application would have shown nothing.
+>
+> The barrier cannot be "no port writes". It has to be "no register writes", and
+> only the layer that knows which writes are register writes can enforce it.
+> ADR-022 is superseded by ADR-023; the full account is there.
+
+The two barriers fail differently, which is why both are needed. A coding error
+in the startup gate produces a command the application believes is authorised. A
+coding error in the bus produces an `Unsupported` that the controller reports
+and fails safe on.
+
+A read-capable backend reports `BackendState::Ready`, not `Faulted`. It does
 everything monitor-only operation needs, and calling it `Faulted` would suggest
-something is wrong when it is working exactly as configured.
+something is wrong when it is working exactly as configured on a machine that
+has not been verified.
 
-This matters because the two barriers fail differently. A coding error in the
-startup gate produces a command the application believes is authorised. A coding
-error in the I/O layer produces a `Unsupported` that the controller reports and
-fails safe on. Neither is a substitute for the other, and both are required
-before any machine reaches a hardware report.
+**What a refusal looks like from the outside.** `AppBridge::apply` returns
+`attempted = true` and `succeeded = false`. `attempted` means the bridge *tried*,
+not that the hardware was touched — a denying bus is never touched. The
+distinction is the difference between a claim about the machine and a claim
+about the code, and only the second is answerable from inside the process. To
+know whether a register changed, read the backend's port trace.
 
 ### 4.2 A refusal is a correct outcome and is shown as one
 

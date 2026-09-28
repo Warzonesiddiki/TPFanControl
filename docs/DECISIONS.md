@@ -446,7 +446,9 @@ second reviewer.
 
 ## ADR-022 — The EC backend is read-only by default, with no way back
 
-**Status.** Accepted, T3. T3-02, T3-09.
+**Status.** SUPERSEDED by ADR-023, T3. Retained because the reasoning error is
+worth reading: the conclusion was right, and it was reached by a route that
+does not work. See "What ADR-022 got wrong" below.
 
 **Context.** T3-02 routes the application's EC access through `IIoBackend`.
 `LegacyBackend` adapts the application's existing `ReadByteFromEC` and
@@ -489,3 +491,95 @@ wrong when it is in fact working exactly as configured (ADR-007, T3-09).
 **Revisit conditions.** Never for the absence of `makeWritable()`. If a future
 need requires a writable backend on a machine that is not verified, that need
 should be treated as a safety defect, not a feature.
+
+**What ADR-022 got wrong.** Two things, both found by running the code rather
+than reading it.
+
+*The barrier was in the wrong layer.* It was placed on the backend, on the
+reasoning that a backend which cannot write cannot cause harm. But the EC
+protocol writes a command byte to the status port even to READ, so `EcBus`
+rejects a backend that cannot write ports. A "read-only" backend therefore made
+**every read fail**, with "backend cannot write ports, which a read requires".
+The application would have displayed nothing. The claim that this was "Ready,
+and does everything monitor-only operation needs" was false, and it was written
+into ADR-022 and SAFETY.md 4.1 in the same commit that introduced the code.
+
+The barrier cannot be "no port writes". It has to be "no REGISTER writes", and
+only the layer that knows which writes are register writes can enforce that.
+
+*`LegacyBackend` was the wrong shape entirely.* It implemented `IIoBackend`,
+whose methods take ports, by handing those numbers to
+`FANCONTROL::ReadByteFromEC` / `WriteByteToEC` - which take register offsets
+and speak the whole two-phase protocol themselves. Every `EcBus` operation
+therefore started a second transaction nested inside the first, and a single
+register read wrote registers 0x04 and 0x00. The `makeReadOnly` flag was beside
+the point: the class should never have held a register-level API.
+
+Both errors had the same cause: a correct-sounding claim about a layer written
+without asking what number actually arrives at the layer below. The correction
+is ADR-023.
+
+## ADR-023 — The register-write barrier belongs to EcBus, and the backend is a port backend
+
+**Status.** Accepted, T3. Supersedes ADR-022. Amends ADR-020.
+
+**Context.** T3-02 had to connect the portable core to the legacy application's
+privileged I/O. The first attempt put the control barrier in the backend, as
+`LegacyBackend::makeReadOnly()`, and gave that class register-offset primitives
+that implemented the EC protocol themselves. Both choices are described, with
+their consequences, in the two sections above.
+
+The generalisation: **`IIoBackend` is a port interface, and the EC protocol sits
+above it.** Anything that implements `IIoBackend` must forward port numbers
+unchanged and interpret nothing. A backend that knows what a register is, or
+what the command sequence is, has duplicated a layer, and the two copies will
+diverge - which is precisely what happened here.
+
+**Decision 1 — `EcBus::setRegisterWritesAllowed`, false by default.**
+
+`writeRegister` refuses before the transaction is attempted and before any port
+is touched, with `IoErrorCode::Unsupported` and a message that says why and
+that reads are unaffected. Reads are entirely unaffected, which is the point:
+monitor-only operation must work on a machine where control has never been
+enabled.
+
+Deny by default rather than allow by default, so the code that can change
+someone's fan is the code that has to be edited to do it. `BridgeConfig` carries
+the flag and `AppBridge` applies it in its constructor, so the bus's policy is
+always exactly what the configuration said and cannot be flipped afterwards by
+somebody who forgot.
+
+`CoreInit` contains no line enabling it. Not commented out, not read from a
+configuration file - absent. Adding it is a source change made in the same
+commit as the hardware report that justifies it.
+
+**Decision 2 — `LegacyBackend` is a port backend.**
+
+It wraps TVicPort's `ReadPort` and `WritePort`, forwards port numbers
+unchanged, and records a trace of every call. The trace is not instrumentation
+for its own sake: it is how a claim like "this cycle changed no register" is
+checked, and it is what would have caught the nested-transaction defect. The
+first version of the tests asserted on return values and passed while the
+system was wrong; the ones that matter now assert on the sequence of numbers
+that reached the primitive.
+
+**Decision 3 — the fan-selector switch stays separate.**
+
+Enabling register writes does not enable the fan selector. They are different
+claims about different machines: one says "I know what these registers mean",
+the other says "I know how to select a fan on this topology". Phase 0
+establishes the first. The second still does not exist (ADR-021).
+
+**Consequences.**
+
+- Every test that writes now says so, through a named `makeWritable()` call.
+  Which tests exercise a write is visible rather than implicit, and a new test
+  that forgets fails loudly instead of silently asserting the refusal.
+- `EcBus` gains a piece of policy. That is the right place for it: the bus is
+  the only layer that can tell a register write from a command-port write.
+- The application has one implementation of the EC protocol. Two was always
+  going to be a bug waiting for a hardware report to find.
+
+**Revisit conditions.** Never for the deny-by-default direction. If a future
+need requires register writes on a machine that has not been verified, that need
+is a safety defect, not a feature.

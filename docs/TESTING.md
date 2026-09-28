@@ -64,9 +64,9 @@ driver:
 |---|---|---:|---|
 | `core_tests` | `tests/core_tests.cpp` | 11 | curves, sensor validation, stuck/stale sources, controller gates, safety states |
 | `ec_protocol_tests` | `tests/ec_protocol_tests.cpp` | 42 | `EcBus` transactions, wire sequence, IBF/OBF waits, timeouts, the `0x31` refusal |
-| `app_bridge_tests` | `tests/app_bridge_tests.cpp` | 29 | the seam: a command reaches the EC only if the core authorised it, readback verification, fail-safe on a read failure |
+| `app_bridge_tests` | `tests/app_bridge_tests.cpp` | 31 | the seam: a command reaches the EC only if the core authorised it, readback verification, fail-safe on a read failure |
 | `legacy_policy_tests` | `tests/legacy_policy_tests.cpp` | 20 | the legacy UI's intent translated to a core request; the refusal to address an individual fan; the monitor-only guard; the final-manual refusal |
-| `legacy_backend_tests` | `tests/legacy_backend_tests.cpp` | 13 | the EC access policy: the read-only state, typed failures, behaviour when the driver closes underneath a call |
+| `legacy_backend_tests` | `tests/legacy_backend_tests.cpp` | 16 | the port backend: that port numbers arrive unchanged, that `EcBus` + backend is exactly one transaction, and that register writes are denied by default |
 
 `core_tests` reports no count: it predates the convention and was not renumbered.
 The other four print their own count and fail if it is wrong, so a suite that
@@ -117,7 +117,35 @@ writes a register except `apply`, and `EcBus` refuses `0x31` before touching the
 bus. The static check exists to keep someone from routing around that, not to
 replace it.
 
-### 3.2 Assertions must survive `NDEBUG`
+### 3.2 Assert on what arrives, not on what is returned
+
+This suite was originally written entirely in terms of return values, and it
+passed while the system underneath it was wrong. `LegacyBackend` implemented a
+port interface by handing port numbers to a register-level API, so a single
+register read wrote registers `0x04` and `0x00` on an unverified machine. Every
+function returned a plausible `IoResult`; the numbers arriving at the driver were
+the problem, and no return value mentions numbers.
+
+The tests that matter here are therefore written against the trace:
+
+- a register read through `EcBus` must arrive at the primitives as
+  command byte → address byte → one data-port read, in that order;
+- every port that appears in the trace must be a real configured port, never a
+  register address in disguise;
+- a denied register write must produce **no call at all**, not a call that was
+  rolled back.
+
+The fake also models enough of the EC status protocol for a transaction to
+complete — a command is accepted, a data write fills the output buffer, a data
+read empties it. A fake returning a constant times out on every read, so a
+sequence test written against one would be testing the timeout path while
+appearing to test the sequence. That is a test that passes for the wrong reason,
+which is worse than one that fails.
+
+Both defects were found by asking what number actually reached the layer below,
+not by reading the code. That question is now a permanent test.
+
+### 3.3 Assertions must survive `NDEBUG`
 
 Tests use the `CHECK` macro from `tests/test_check.h`, **not** `assert`.
 
@@ -131,7 +159,7 @@ with `-O2 -DNDEBUG` specifically to prove the assertions are still live. The
 difference was verified directly rather than assumed: under `-DNDEBUG`, a deliberately
 failing `CHECK` aborts with exit 134, and the same condition in an `assert` exits 0.
 
-### 3.3 Assertions must be against evidence, not intent
+### 3.4 Assertions must be against evidence, not intent
 
 Where a test needs to know what reached the hardware, it must read a record of what
 actually happened, not what the code intended. The EC fake maintains two logs
@@ -159,7 +187,7 @@ Cover:
 
 No portable-core test may issue a real port I/O operation.
 
-### 3.4 What the EC suite does not prove
+### 3.5 What the EC suite does not prove
 
 The fake models a conventional 0x62/0x66-style EC closely enough to exercise
 `EcBus`, and it is the only thing standing between the code and the hardware. It does
