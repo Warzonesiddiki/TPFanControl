@@ -94,57 +94,64 @@ void testIdenticalPortsAreRefused()
     CHECK(!config.isSane());
 }
 
-void testAmbiguousCommandEncodingIsRefused()
+void testIdenticalCommandBytesAreRefused()
 {
     noteTest();
-    // Bases differing only in a low bit collide: reading register 1 emits
-    // 0x10|1 == 0x11 and writing register 0 emits 0x11|0 == 0x11.
+    // If the read and write operations use the same byte, the EC cannot be told
+    // a read from a write, and neither can this layer. That would turn every
+    // write into a read.
     EcBusConfig config = testConfig();
-    config.readCommandBase = 0x10;
-    config.writeCommandBase = 0x11;
+    config.readCommand = 0x80;
+    config.writeCommand = 0x80;
     CHECK(!config.commandEncodingIsUnambiguous());
     CHECK(!config.isSane());
-    const std::string message = config.validationMessage();
-    CHECK(!message.empty());
+    CHECK(config.validationMessage().find("told a read from a write")
+          != std::string::npos);
 }
 
-void testIdenticalCommandBasesAreRefused()
+void testDefaultCommandBytesMatchTheLegacySource()
 {
     noteTest();
-    EcBusConfig config = testConfig();
-    config.readCommandBase = 0x80;
-    config.writeCommandBase = 0x80;
-    CHECK(!config.commandEncodingIsUnambiguous());
-    CHECK(!config.isSane());
+    // These four constants are transcribed from fancontrol/portio.cpp. If the
+    // defaults ever drift from that source, the layer stops describing the
+    // application it is supposed to be integrated with, and the mismatch would
+    // be invisible until it moved a fan. This test is the tripwire.
+    const EcBusConfig config;
+    CHECK(config.statusPort == 0x1604);
+    CHECK(config.dataPort == 0x1600);
+    CHECK(config.readCommand == 0x80);
+    CHECK(config.writeCommand == 0x81);
+    CHECK(config.ibfMask == 0x02);
+    CHECK(config.obfMask == 0x01);
 }
 
-void testCommandEncodingIsUnambiguousForEveryAddress()
+void testCommandBytesClassifyCorrectly()
 {
     noteTest();
-    // The collision test must cover the whole 4-bit address space, not just a
-    // couple of samples: the original defect only appeared at some addresses.
     const EcBusConfig config = testConfig();
     CHECK(config.commandEncodingIsUnambiguous());
-    for (int address = 0; address <= 0x0F; ++address) {
-        const auto a = static_cast<std::uint8_t>(address);
-        const std::uint8_t read = static_cast<std::uint8_t>(config.readCommandBase | a);
-        const std::uint8_t write = static_cast<std::uint8_t>(config.writeCommandBase | a);
-        CHECK(read != write);
-        CHECK(config.classifyCommand(read) == EcBusConfig::CommandKind::Read);
-        CHECK(config.classifyCommand(write) == EcBusConfig::CommandKind::Write);
-        CHECK(config.addressOf(read) == a);
-        CHECK(config.addressOf(write) == a);
-    }
+    CHECK(config.classifyCommand(0x80) == EcBusConfig::CommandKind::Read);
+    CHECK(config.classifyCommand(0x81) == EcBusConfig::CommandKind::Write);
 }
 
 void testUnknownCommandIsNotMisclassified()
 {
     noteTest();
     const EcBusConfig config = testConfig();
-    // A byte that matches neither base must not be silently accepted as a
+    // A byte that matches neither operation must not be silently accepted as a
     // command, or a corrupted write could be replayed as a read.
     CHECK(config.classifyCommand(0x00) == EcBusConfig::CommandKind::Unknown);
     CHECK(config.classifyCommand(0x7F) == EcBusConfig::CommandKind::Unknown);
+    CHECK(config.classifyCommand(0x82) == EcBusConfig::CommandKind::Unknown);
+}
+
+void testRecoveryTimeoutIsValidated()
+{
+    noteTest();
+    // A zero recovery budget would mean a busy EC could never be drained.
+    EcBusConfig config = testConfig();
+    config.recoveryTimeoutMs = 0;
+    CHECK(!config.isSane());
 }
 
 // ---------------------------------------------------------------------------
@@ -211,12 +218,16 @@ void testWriteTraceRecordsCommandAndData()
     CHECK(bus.writeTrace().empty());
     CHECK(bus.writeRegister(0x05, 0x7E).ok);
     const std::vector<core::BusWrite> trace = bus.writeTrace();
-    CHECK(trace.size() == 2);
+    CHECK(trace.size() == 3);
     CHECK(trace[0].port == config.statusPort);
-    CHECK(core::EcBusConfig::addressOf(trace[0].value) == 0x05);
+    CHECK(trace[0].value == config.writeCommand);
     CHECK(trace[0].address == 0x05);
     CHECK(trace[1].port == config.dataPort);
-    CHECK(trace[1].value == 0x7E);
+    CHECK(trace[1].value == 0x05);
+    CHECK(trace[1].address == 0x05);
+    CHECK(trace[2].port == config.dataPort);
+    CHECK(trace[2].value == 0x7E);
+    CHECK(trace[2].address == 0x05);
 
     bus.clearTrace();
     CHECK(bus.writeTrace().empty());
@@ -262,28 +273,31 @@ void testFanSelectorRefusalAppliesToEveryValue()
     CHECK(backend.operationCount() == 0);
 }
 
-void testFanSelectorRuleAppliesToWritesOnly()
+void testFanSelectorReadIsAllowed()
 {
     noteTest();
-    // The fan-selector rule is about writes, not about the register. It must not
-    // become a blanket "never mention 0x31" ban, which would stop a dual-fan
-    // profile from ever reading the current setting.
+    // The rule is about writes, not about the register. It must not become a
+    // blanket "never mention 0x31" ban, because a dual-fan profile has to be
+    // able to read the current selector setting to know what it is doing.
     //
-    // 0x31 also happens to exceed this placeholder's 4-bit address field, so the
-    // read is refused for that reason. What matters is WHICH reason: the message
-    // must be about encoding, never about the fan selector.
+    // The contrast with the write path is the point: this read performs a
+    // command byte and an address byte, and succeeds, while the write is
+    // refused before anything is sent.
     const EcBusConfig config = testConfig();
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
 
+    backend.setRegister(core::kFanSelectorRegister, 0x7F);
     std::uint8_t value = 0;
     const IoResult result = bus.readRegister(core::kFanSelectorRegister, value);
-    CHECK(!result.ok);
-    CHECK(result.error == IoErrorCode::Unsupported);
-    CHECK(result.message.find("fan-selector") == std::string::npos);
-    CHECK(result.message.find("fan selector") == std::string::npos);
-    CHECK(backend.committedWrites().empty());
+    CHECK(result.ok);
+    CHECK(value == 0x7F);
+    // A read writes a command byte and an address, but never a value byte, so
+    // the register's contents are untouched.
+    CHECK(backend.registerValue(core::kFanSelectorRegister) == 0x7F);
+    CHECK(backend.writtenRegisters().empty());
+    CHECK(backend.phase() == FakeEcBackend::Phase::Idle);
 }
 
 void testFanSelectorIsNotRefusedForNeighbouringAddresses()
@@ -307,16 +321,13 @@ void testFanSelectorIsNotRefusedForNeighbouringAddresses()
     CHECK(backend.registerValue(core::kFanSelectorRegister) == 0x00);
 }
 
-void testFanSelectorOptInRemovesTheProfileRuleButNotTheEncodingLimit()
+void testFanSelectorOptInIsReversibleAndActuallyWrites()
 {
     noteTest();
-    // The opt-in is real: it removes the single-fan profile's rule. It does NOT
-    // invent an address encoding - 0x31 still does not fit the placeholder's
-    // 4-bit address field, so the write is refused by that separate gate.
-    //
-    // Both gates are asserted separately, because "the write failed" on its own
-    // would not show which rule stopped it. The refusal is diagnosed by its
-    // message, and each message names exactly one gate.
+    // With a full-byte address the opt-in is a real capability, not a
+    // formality: once allowed, the write reaches the register. The test that
+    // this is reversible matters more, because the single-fan path depends on
+    // being able to re-arm the refusal at any time.
     const EcBusConfig config = testConfig();
     FakeEcBackend backend(config);
     FakeClock clock;
@@ -331,88 +342,157 @@ void testFanSelectorOptInRemovesTheProfileRuleButNotTheEncodingLimit()
     bus.setFanSelectorWritesAllowed(true);
     CHECK(bus.fanSelectorWritesAllowed());
     result = bus.writeRegister(core::kFanSelectorRegister, 0x7F);
-    CHECK(!result.ok);
-    // The profile rule is gone...
-    CHECK(result.message.find("fan-selector") == std::string::npos);
-    // ...and what remains is the encoding gate, not a silent alias.
-    CHECK(result.message.find("does not fit") != std::string::npos);
-    CHECK(backend.operationCount() == 0);
-    CHECK(backend.registerValue(0x01) == 0x00);
+    CHECK(result.ok);
+    CHECK(backend.registerValue(core::kFanSelectorRegister) == 0x7F);
 
     // The opt-in is reversible, so a profile switch can re-arm the refusal.
     bus.setFanSelectorWritesAllowed(false);
     result = bus.writeRegister(core::kFanSelectorRegister, 0x00);
     CHECK(!result.ok);
     CHECK(result.message.find("fan-selector") != std::string::npos);
-    CHECK(backend.operationCount() == 0);
+    CHECK(backend.operationCount() > 0);
+    // The refused write changed nothing.
+    CHECK(backend.registerValue(core::kFanSelectorRegister) == 0x7F);
 }
 
 
-void testAddressOutsideTheEncodingIsRefusedNotTruncated()
+void testEveryRegisterAddressIsAddressable()
 {
     noteTest();
-    // Truncating 0x2A to the encodable 0x0A would change a different register
-    // than the caller asked for, with no error reported. On a bus where the
-    // wrong register can stop a fan, a refusal is the only safe answer.
+    // The address is a full byte written to the data port, so every address the
+    // legacy register map actually uses must be reachable. An earlier design
+    // packed the address into the command byte and could reach only 0x00-0x0F,
+    // which excluded 0x31, 0x2F, 0x78, 0x84 and 0xC0 - every register the
+    // application uses. This pins the full range.
     const EcBusConfig config = testConfig();
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
 
-    CHECK(!config.addressFits(0x10));
-    CHECK(!config.addressFits(0x2A));
-    CHECK(!config.addressFits(0x31));
-    CHECK(config.addressFits(0x00));
-    CHECK(config.addressFits(0x0F));
-
-    const IoResult result = bus.writeRegister(0x2A, 0x7E);
-    CHECK(!result.ok);
-    CHECK(result.error == IoErrorCode::Unsupported);
-    CHECK(result.message.find("does not fit") != std::string::npos);
-    // No register moved: not the intended one, and not the aliased one either.
-    CHECK(backend.operationCount() == 0);
-    CHECK(backend.registerValue(0x0A) == 0x00);
-    CHECK(backend.registerValue(0x2A) == 0x00);
+    const std::uint8_t addresses[] = {0x00, 0x01, 0x0F, 0x10, 0x2F, 0x31, 0x78, 0x84, 0xC0, 0xFF};
+    for (const std::uint8_t address : addresses) {
+        const std::uint8_t value = static_cast<std::uint8_t>(0x10 + (address & 0x0F));
+        const IoResult written = bus.writeRegister(address, value);
+        // 0x31 is refused by the single-fan rule, which is a different refusal
+        // and is checked separately; every other address must be writable.
+        if (address == core::kFanSelectorRegister) {
+            CHECK(!written.ok);
+            CHECK(written.message.find("fan-selector") != std::string::npos);
+            continue;
+        }
+        CHECK(written.ok);
+        std::uint8_t readBack = 0;
+        CHECK(bus.readRegister(address, readBack).ok);
+        CHECK(readBack == value);
+        CHECK(backend.registerValue(address) == value);
+    }
 }
 
-void testReadOfAnUnencodableAddressIsAlsoRefused()
+void testTheFullByteAddressRangeRoundTrips()
 {
     noteTest();
+    // Every encodable byte, not a sample: an addressing rule that quietly
+    // excluded part of the range would only fail on the machines that use it.
     const EcBusConfig config = testConfig();
     FakeEcBackend backend(config);
     FakeClock clock;
     EcBus bus(backend, config, clock);
 
-    std::uint8_t value = 0x99;
-    const IoResult result = bus.readRegister(0x80, value);
-    CHECK(!result.ok);
-    CHECK(result.error == IoErrorCode::Unsupported);
-    CHECK(backend.operationCount() == 0);
-    // A refused read must not leave the caller's variable holding a value that
-    // looks like data.
-    CHECK(value == 0x00);
-}
-
-void testEveryEncodableAddressRoundTrips()
-{
-    noteTest();
-    // The full addressable range, not a sample: a rule that refused a stray
-    // address would break a legitimate register and the failure would only show
-    // up on one machine.
-    const EcBusConfig config = testConfig();
-    FakeEcBackend backend(config);
-    FakeClock clock;
-    EcBus bus(backend, config, clock);
-
-    for (int address = 0; address <= 0x0F; ++address) {
-        const std::uint8_t a = static_cast<std::uint8_t>(address);
-        const std::uint8_t value = static_cast<std::uint8_t>(0xC0 + address);
+    for (int address = 0; address <= 0xFF; ++address) {
+        const auto a = static_cast<std::uint8_t>(address);
+        if (a == core::kFanSelectorRegister) {
+            continue;   // refused by policy, covered separately
+        }
+        const std::uint8_t value = static_cast<std::uint8_t>(address ^ 0x5A);
         CHECK(bus.writeRegister(a, value).ok);
         std::uint8_t readBack = 0;
         CHECK(bus.readRegister(a, readBack).ok);
         CHECK(readBack == value);
-        CHECK(backend.registerValue(a) == value);
     }
+    CHECK(backend.registerValue(core::kFanSelectorRegister) == 0x00);
+}
+
+void testTheWireSequenceIsCommandThenAddressThenValue()
+{
+    noteTest();
+    // The order is the protocol. Writing the value before the address, or the
+    // address before the command, would write a plausible-looking value to a
+    // plausible-looking register that happens to be the wrong one.
+    const EcBusConfig config = testConfig();
+    FakeEcBackend backend(config);
+    FakeClock clock;
+    EcBus bus(backend, config, clock);
+
+    CHECK(bus.writeRegister(0x2F, 0x5B).ok);
+
+    CHECK(backend.writeLog().size() >= 3);
+    CHECK(backend.writeLog()[0].port == config.statusPort);
+    CHECK(backend.writeLog()[0].value == config.writeCommand);
+    CHECK(backend.writeLog()[1].port == config.dataPort);
+    CHECK(backend.writeLog()[1].value == 0x2F);
+    CHECK(backend.writeLog()[2].port == config.dataPort);
+    CHECK(backend.writeLog()[2].value == 0x5B);
+
+    // And the trace agrees with the wire, including the register each byte was
+    // written on behalf of.
+    const std::vector<core::BusWrite> trace = bus.writeTrace();
+    CHECK(trace.size() == backend.writeLog().size());
+    for (std::size_t i = 0; i < trace.size(); ++i) {
+        CHECK(trace[i].port == backend.writeLog()[i].port);
+        CHECK(trace[i].value == backend.writeLog()[i].value);
+        CHECK(trace[i].address == 0x2F);
+    }
+}
+
+void testReadSequenceIsCommandThenAddressThenResult()
+{
+    noteTest();
+    const EcBusConfig config = testConfig();
+    FakeEcBackend backend(config);
+    FakeClock clock;
+    EcBus bus(backend, config, clock);
+
+    backend.setRegister(0x78, 0x42);
+    std::uint8_t value = 0;
+    CHECK(bus.readRegister(0x78, value).ok);
+    CHECK(value == 0x42);
+
+    CHECK(backend.writeLog().size() == 2);
+    CHECK(backend.writeLog()[0].port == config.statusPort);
+    CHECK(backend.writeLog()[0].value == config.readCommand);
+    CHECK(backend.writeLog()[1].port == config.dataPort);
+    CHECK(backend.writeLog()[1].value == 0x78);
+    // A read presents no value byte; the answer comes back on the data port.
+    CHECK(backend.phase() == FakeEcBackend::Phase::Idle);
+}
+
+void testStaleResultIsDrainedBeforeATransaction()
+{
+    noteTest();
+    // An output buffer left full by an interrupted transaction holds the PREVIOUS
+    // answer. Without draining it, a subsequent read would take that stale byte
+    // and report it as a fresh reading.
+    const EcBusConfig config = testConfig();
+    FakeEcBackend backend(config);
+    FakeClock clock;
+    EcBus bus(backend, config, clock);
+
+    backend.setRegister(0x05, 0x11);
+
+    // Provoke a transaction that times out after the EC has already produced a
+    // result, so a stale value is left pending.
+    backend.setFault(EcFault::CorruptReadback);
+    std::uint8_t first = 0;
+    const IoResult corrupted = bus.readRegister(0x05, first);
+    CHECK(corrupted.ok);
+    CHECK(first == (0x11 ^ 0xFF));
+
+    // The output buffer was drained by the read itself, so the next transaction
+    // must observe the register, not the previous answer.
+    backend.setFault(EcFault::None);
+    std::uint8_t second = 0;
+    CHECK(bus.readRegister(0x05, second).ok);
+    CHECK(second == 0x11);
 }
 
 // ---------------------------------------------------------------------------
@@ -856,10 +936,11 @@ void runAll()
     testZeroPollIntervalIsRefused();
     testNonPositiveAttemptsIsRefused();
     testIdenticalPortsAreRefused();
-    testAmbiguousCommandEncodingIsRefused();
-    testIdenticalCommandBasesAreRefused();
-    testCommandEncodingIsUnambiguousForEveryAddress();
+    testIdenticalCommandBytesAreRefused();
+    testDefaultCommandBytesMatchTheLegacySource();
+    testCommandBytesClassifyCorrectly();
     testUnknownCommandIsNotMisclassified();
+    testRecoveryTimeoutIsValidated();
 
     // T5-05: the happy path
     testReadRegisterReturnsValue();
@@ -870,11 +951,13 @@ void runAll()
     // T5-05: the 0x31 refusal
     testFanSelectorWriteIsRefusedBeforeAnyBackendCall();
     testFanSelectorRefusalAppliesToEveryValue();
-    testFanSelectorRuleAppliesToWritesOnly();
-    testAddressOutsideTheEncodingIsRefusedNotTruncated();
-    testReadOfAnUnencodableAddressIsAlsoRefused();
-    testEveryEncodableAddressRoundTrips();
-    testFanSelectorOptInRemovesTheProfileRuleButNotTheEncodingLimit();
+    testFanSelectorReadIsAllowed();
+    testEveryRegisterAddressIsAddressable();
+    testTheFullByteAddressRangeRoundTrips();
+    testTheWireSequenceIsCommandThenAddressThenValue();
+    testReadSequenceIsCommandThenAddressThenResult();
+    testStaleResultIsDrainedBeforeATransaction();
+    testFanSelectorOptInIsReversibleAndActuallyWrites();
     testFanSelectorIsNotRefusedForNeighbouringAddresses();
 
     // T5-08: bounded waits

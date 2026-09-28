@@ -64,78 +64,52 @@ void SteadyClock::sleepMs(std::uint64_t milliseconds) noexcept
 
 bool EcBusConfig::commandEncodingIsUnambiguous() const noexcept
 {
-    // The address occupies the low nibble, so only the high nibble can carry the
-    // read/write distinction. Anything else collides for at least one address.
-    return (readCommandBase & 0xF0) != (writeCommandBase & 0xF0);
+    return readCommand != writeCommand;
 }
 
 EcBusConfig::CommandKind EcBusConfig::classifyCommand(std::uint8_t command) const noexcept
 {
-    const std::uint8_t high = static_cast<std::uint8_t>(command & 0xF0);
-    if (high == static_cast<std::uint8_t>(readCommandBase & 0xF0)) {
+    if (command == readCommand) {
         return CommandKind::Read;
     }
-    if (high == static_cast<std::uint8_t>(writeCommandBase & 0xF0)) {
+    if (command == writeCommand) {
         return CommandKind::Write;
     }
     return CommandKind::Unknown;
 }
 
-bool EcBusConfig::addressFits(std::uint8_t address) const noexcept
-{
-    const int limit = 1 << kAddressBits;
-    return address < static_cast<std::uint8_t>(limit);
-}
-
-std::uint8_t EcBusConfig::addressOf(std::uint8_t command) noexcept
-{
-    return static_cast<std::uint8_t>(command & 0x0F);
-}
-
 bool EcBusConfig::isSane() const noexcept
 {
-    // A zero poll interval with a non-zero timeout is a busy-wait; a zero
-    // timeout is a single attempt with no grace. Both are refused rather than
-    // corrected, because silently "fixing" a configuration is how a caller
-    // ends up believing it asked for something it did not.
-    return timeoutMs > 0
-        && pollIntervalMs > 0
-        && maximumAttempts > 0
-        && statusPort != dataPort
-        && commandEncodingIsUnambiguous();
+    return validationMessage().empty();
 }
 
 std::string EcBusConfig::validationMessage() const
 {
+    if (statusPort == dataPort) {
+        return "EcBusConfig: statusPort and dataPort must differ, otherwise a command "
+            "byte and a data byte are written to the same place";
+    }
     if (timeoutMs == 0) {
-        return "EcBusConfig: timeoutMs must be greater than zero";
+        return "EcBusConfig: timeoutMs must be greater than zero or every wait would "
+            "time out on its first poll";
     }
     if (pollIntervalMs == 0) {
-        return "EcBusConfig: pollIntervalMs must be greater than zero";
+        return "EcBusConfig: pollIntervalMs must be greater than zero or the poll loop "
+            "would spin without ever advancing the clock";
     }
     if (maximumAttempts <= 0) {
-        return "EcBusConfig: maximumAttempts must be greater than zero";
+        return "EcBusConfig: maximumAttempts must be positive or a failure could "
+            "never be reported";
     }
-    if (statusPort == dataPort) {
-        return "EcBusConfig: statusPort and dataPort must differ";
+    if (recoveryTimeoutMs == 0) {
+        return "EcBusConfig: recoveryTimeoutMs must be greater than zero or a busy EC "
+            "could never be recovered";
     }
     if (!commandEncodingIsUnambiguous()) {
-        // Reported precisely: the first colliding address is the one a reader
-        // needs in order to understand the failure.
-        for (int address = 0; address < 16; ++address) {
-            const std::uint8_t low = static_cast<std::uint8_t>(address);
-            const std::uint8_t readCommand =
-                static_cast<std::uint8_t>((readCommandBase & 0xF0) | low);
-            const std::uint8_t writeCommand =
-                static_cast<std::uint8_t>((writeCommandBase & 0xF0) | low);
-            if (readCommand == writeCommand) {
-                return "EcBusConfig: readCommandBase and writeCommandBase are ambiguous: "
-                    "read and write of register " + std::to_string(address)
-                    + " both emit 0x" + std::to_string(readCommand)
-                    + "; the bases must differ in their high nibble";
-            }
-        }
-        return "EcBusConfig: readCommandBase and writeCommandBase must differ in their high nibble";
+        return "EcBusConfig: readCommand and writeCommand are both 0x"
+            + std::to_string(readCommand)
+            + ", so the EC cannot be told a read from a write and neither can this "
+            "layer; they must differ";
     }
     return std::string();
 }
@@ -151,21 +125,19 @@ EcBus::EcBus(IIoBackend& backend, EcBusConfig config, IClock& clock)
 
 EcBus::~EcBus() = default;
 
+const EcBusConfig& EcBus::config() const noexcept
+{
+    return config_;
+}
+
 void EcBus::setFanSelectorWritesAllowed(bool allowed) noexcept
 {
-    std::lock_guard<std::mutex> lock(mutex_);
     fanSelectorWritesAllowed_ = allowed;
 }
 
 bool EcBus::fanSelectorWritesAllowed() const noexcept
 {
-    std::lock_guard<std::mutex> lock(mutex_);
     return fanSelectorWritesAllowed_;
-}
-
-const EcBusConfig& EcBus::config() const noexcept
-{
-    return config_;
 }
 
 std::vector<BusWrite> EcBus::writeTrace() const
@@ -198,29 +170,6 @@ std::uint64_t EcBus::pollCeiling() const noexcept
     return std::max<std::uint64_t>(derived, kMinimumCeiling);
 }
 
-IoResult EcBus::readStatus(std::uint8_t& status)
-{
-    IoResult result = backend_.readPort(config_.statusPort);
-    if (!result.ok) {
-        return result;
-    }
-    status = result.value;
-    return IoResult::success(status);
-}
-
-IoResult EcBus::writeCommand(std::uint8_t command)
-{
-    IoResult result = backend_.writePort(config_.statusPort, command);
-    if (result.ok) {
-        // Record the address actually encoded in the command, not a fixed zero.
-        // The T5-10 check walks the trace looking for 0x31, and a trace whose
-        // address field is always zero would make that check vacuous.
-        writeTrace_.push_back(
-            BusWrite{config_.statusPort, command, EcBusConfig::addressOf(command)});
-    }
-    return result;
-}
-
 // Waits until the status bit reaches the expected state. Bounded twice: by the
 // deadline, and by a poll count derived from the same timeout, so the loop
 // cannot spin forever even if the clock is frozen.
@@ -230,19 +179,16 @@ IoResult EcBus::waitForStatus(std::uint8_t mask, bool expectSet, const char* wha
     const std::uint64_t ceiling = pollCeiling();
 
     for (std::uint64_t poll = 0; poll < ceiling; ++poll) {
-        std::uint8_t status = 0;
-        IoResult read = readStatus(status);
+        const IoResult read = backend_.readPort(config_.statusPort);
         if (!read.ok) {
             return read;
         }
 
-        const bool isSet = (status & mask) != 0;
-        if (isSet == expectSet) {
-            return IoResult::success(status);
+        if (((read.value & mask) != 0) == expectSet) {
+            return read;
         }
 
-        const std::uint64_t now = clock_.nowMs();
-        if (now >= deadline) {
+        if (clock_.nowMs() >= deadline) {
             break;
         }
         clock_.sleepMs(config_.pollIntervalMs);
@@ -250,12 +196,105 @@ IoResult EcBus::waitForStatus(std::uint8_t mask, bool expectSet, const char* wha
 
     std::string message = std::string("EC ") + what + " did not reach the expected state within "
         + std::to_string(config_.timeoutMs) + "ms";
-    if (expectSet) {
-        message += " (bit never set)";
-    } else {
-        message += " (bit never cleared)";
-    }
+    message += expectSet ? " (bit never set)" : " (bit never cleared)";
     return IoResult::failure(IoErrorCode::Timeout, message);
+}
+
+IoResult EcBus::writeStatusPort(std::uint8_t value, std::uint8_t address)
+{
+    const IoResult result = backend_.writePort(config_.statusPort, value);
+    if (result.ok) {
+        // The address is recorded explicitly rather than recovered from the
+        // command byte, because the command byte no longer carries it. The
+        // T5-10 check walks this trace looking for 0x31, so a trace whose
+        // address field were always zero would make that check vacuous.
+        writeTrace_.push_back(BusWrite{config_.statusPort, value, address});
+    }
+    return result;
+}
+
+IoResult EcBus::writeDataPort(std::uint8_t value, std::uint8_t address)
+{
+    const IoResult result = backend_.writePort(config_.dataPort, value);
+    if (result.ok) {
+        writeTrace_.push_back(BusWrite{config_.dataPort, value, address});
+    }
+    return result;
+}
+
+IoResult EcBus::checkPreconditions(const char* description) const
+{
+    if (!config_.isSane()) {
+        return IoResult::failure(IoErrorCode::Unsupported, config_.validationMessage());
+    }
+    if (backend_.state() != BackendState::Ready) {
+        return IoResult::failure(IoErrorCode::NotInitialized,
+            std::string("backend is not ready; refusing to ") + description + " the EC");
+    }
+    if (!backend_.capabilities().canReadPorts) {
+        return IoResult::failure(IoErrorCode::Unsupported,
+            std::string("backend cannot read ports; a ") + description
+            + " needs the status port to check the buffer state");
+    }
+    // Both directions need a writable port. A read writes a command byte, and a
+    // write obviously does, so a read-only backend cannot serve either. Saying
+    // so plainly is better than failing later on a timeout that looks like a
+    // dead EC.
+    if (!backend_.capabilities().canWritePorts) {
+        return IoResult::failure(IoErrorCode::Unsupported,
+            std::string("backend cannot write ports, which a ") + description + " requires");
+    }
+    return IoResult::success();
+}
+
+IoResult EcBus::recoverBus()
+{
+    // Wait for the input buffer to clear, so a command is not issued into an EC
+    // that is still busy with the previous one.
+    IoResult ready = waitForStatus(config_.ibfMask, false, "input buffer");
+    if (!ready.ok) {
+        return ready;
+    }
+
+    // A result left over from an earlier transaction is not this transaction's
+    // answer. Draining it is what stops a stale byte from being returned as a
+    // fresh reading.
+    if ((ready.value & config_.obfMask) != 0) {
+        const IoResult drained = backend_.readPort(config_.dataPort);
+        if (!drained.ok) {
+            return drained;
+        }
+    }
+    return IoResult::success();
+}
+
+IoResult EcBus::runTransaction(const char* description, const Attempt& attempt)
+{
+    std::string lastError = "no attempt was made";
+    IoErrorCode lastCode = IoErrorCode::Timeout;
+
+    for (int n = 0; n < config_.maximumAttempts; ++n) {
+        const IoResult result = attempt();
+        if (result.ok) {
+            return result;
+        }
+        if (!isRetryable(result.error)) {
+            // A standing condition. Retrying it cannot succeed and only delays
+            // the report, which is the delay the failsafe path is waiting on.
+            return result;
+        }
+        if (result.error == IoErrorCode::Timeout) {
+            ++timeoutCount_;
+        }
+        lastCode = result.error;
+        lastError = result.message;
+    }
+
+    // The specific cause is preserved rather than collapsed into Timeout, so a
+    // caller can still tell a permissions problem from a dead EC.
+    return IoResult::failure(lastCode,
+        std::string("EC ") + description + " failed after "
+            + std::to_string(config_.maximumAttempts) + " attempt(s): " + lastError);
 }
 
 IoResult EcBus::readRegister(std::uint8_t address, std::uint8_t& value)
@@ -264,106 +303,58 @@ IoResult EcBus::readRegister(std::uint8_t address, std::uint8_t& value)
 
     std::lock_guard<std::mutex> lock(mutex_);
 
-    if (!config_.isSane()) {
-        return IoResult::failure(IoErrorCode::Unsupported, config_.validationMessage());
-    }
-    if (!config_.addressFits(address)) {
-        return IoResult::failure(IoErrorCode::Unsupported,
-            "register address 0x" + std::to_string(address) + " does not fit the "
-            + std::to_string(EcBusConfig::kAddressBits)
-            + "-bit address field of the current command encoding; refusing to "
-            "truncate it to a different register");
-    }
-    if (backend_.state() != BackendState::Ready) {
-        return IoResult::failure(IoErrorCode::NotInitialized,
-            "backend is not ready; refusing to read the EC");
-    }
-    if (!backend_.capabilities().canReadPorts) {
-        return IoResult::failure(IoErrorCode::Unsupported,
-            "backend cannot read ports; a read needs the command port");
-    }
-    // A read writes the command port. A read-only backend cannot serve it, and
-    // reporting that plainly is better than failing later on a timeout.
-    if (!backend_.capabilities().canWritePorts) {
-        return IoResult::failure(IoErrorCode::Unsupported,
-            "backend cannot write ports, which a read command requires");
+    const IoResult ready = checkPreconditions("read");
+    if (!ready.ok) {
+        return ready;
     }
 
     ++transactionCount_;
 
-    std::string lastError = "no attempt was made";
-    IoErrorCode lastCode = IoErrorCode::Timeout;
-    for (int attempt = 0; attempt < config_.maximumAttempts; ++attempt) {
-        // 1. The input buffer must be empty before a command is issued.
-        IoResult ready = waitForStatus(config_.ibfMask, false, "input buffer");
-        if (!ready.ok) {
-            if (!isRetryable(ready.error)) {
-                return ready;
-            }
-            if (ready.error == IoErrorCode::Timeout) {
-                ++timeoutCount_;
-            }
-            lastCode = ready.error;
-            lastError = ready.message;
-            continue;
+    return runTransaction("read", [this, address, &value]() -> IoResult {
+        IoResult step = recoverBus();
+        if (!step.ok) {
+            return step;
         }
 
-        // 2. Issue the read command.
-        IoResult issued = writeCommand(
-            static_cast<std::uint8_t>(config_.readCommandBase | address));
-        if (!issued.ok) {
-            // A failed command write follows the same retry policy as a
-            // failed status read. Returning here would make WriteFailure the
-            // one retryable code that is never retried, which is exactly the
-            // inconsistency that hides a transient backend fault.
-            if (!isRetryable(issued.error)) {
-                return issued;
-            }
-            if (issued.error == IoErrorCode::Timeout) {
-                ++timeoutCount_;
-            }
-            lastCode = issued.error;
-            lastError = issued.message;
-            continue;
+        step = writeStatusPort(config_.readCommand, address);
+        if (!step.ok) {
+            return step;
         }
 
-        // 3. Wait for the output buffer to fill.
-        IoResult filled = waitForStatus(config_.obfMask, true, "output buffer");
-        if (!filled.ok) {
-            if (!isRetryable(filled.error)) {
-                return filled;
-            }
-            if (filled.error == IoErrorCode::Timeout) {
-                ++timeoutCount_;
-            }
-            lastCode = filled.error;
-            lastError = filled.message;
-            continue;
+        step = waitForStatus(config_.ibfMask, false, "input buffer after read command");
+        if (!step.ok) {
+            return step;
         }
 
-        // 4. Read the data byte.
-        IoResult data = backend_.readPort(config_.dataPort);
+        step = writeDataPort(address, address);
+        if (!step.ok) {
+            return step;
+        }
+
+        step = waitForStatus(config_.obfMask, true, "output buffer");
+        if (!step.ok) {
+            return step;
+        }
+
+        const IoResult data = backend_.readPort(config_.dataPort);
         if (!data.ok) {
             return data;
         }
         value = data.value;
         return IoResult::success(value);
-    }
-
-    return IoResult::failure(lastCode,
-        "EC read of register 0x" + std::to_string(address) + " failed after "
-            + std::to_string(config_.maximumAttempts) + " attempt(s): " + lastError);
+    });
 }
 
 IoResult EcBus::writeRegister(std::uint8_t address, std::uint8_t value)
 {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    if (!config_.isSane()) {
-        return IoResult::failure(IoErrorCode::Unsupported, config_.validationMessage());
+    const IoResult ready = checkPreconditions("write");
+    if (!ready.ok) {
+        return ready;
     }
 
-    // The single-fan refusal, enforced before the backend is even consulted.
+    // The single-fan refusal, enforced before the transaction is attempted.
     // Ordering matters: if this ran after the first port write, a caller that
     // ignored the error would already have stopped the fan.
     if (address == kFanSelectorRegister && !fanSelectorWritesAllowed_) {
@@ -372,106 +363,44 @@ IoResult EcBus::writeRegister(std::uint8_t address, std::uint8_t value)
             "profile must never write it (EC_REGISTER_MAP.md sections 2 and 7)");
     }
 
-    if (!config_.addressFits(address)) {
-        return IoResult::failure(IoErrorCode::Unsupported,
-            "register address 0x" + std::to_string(address) + " does not fit the "
-            + std::to_string(EcBusConfig::kAddressBits)
-            + "-bit address field of the current command encoding; refusing to "
-            "truncate it to a different register");
-    }
-
-    if (backend_.state() != BackendState::Ready) {
-        return IoResult::failure(IoErrorCode::NotInitialized,
-            "backend is not ready; refusing to write the EC");
-    }
-    if (!backend_.capabilities().canWritePorts) {
-        return IoResult::failure(IoErrorCode::Unsupported, "backend cannot write ports");
-    }
-    if (!backend_.capabilities().canReadPorts) {
-        return IoResult::failure(IoErrorCode::Unsupported,
-            "backend cannot read ports, which a write completion check requires");
-    }
-
     ++transactionCount_;
 
-    std::string lastError = "no attempt was made";
-    IoErrorCode lastCode = IoErrorCode::Timeout;
-    for (int attempt = 0; attempt < config_.maximumAttempts; ++attempt) {
-        // 1. Input buffer must be empty.
-        IoResult ready = waitForStatus(config_.ibfMask, false, "input buffer");
-        if (!ready.ok) {
-            if (!isRetryable(ready.error)) {
-                return ready;
-            }
-            if (ready.error == IoErrorCode::Timeout) {
-                ++timeoutCount_;
-            }
-            lastCode = ready.error;
-            lastError = ready.message;
-            continue;
+    return runTransaction("write", [this, address, value]() -> IoResult {
+        IoResult step = recoverBus();
+        if (!step.ok) {
+            return step;
         }
 
-        // 2. Issue the write command.
-        IoResult issued = writeCommand(
-            static_cast<std::uint8_t>(config_.writeCommandBase | address));
-        if (!issued.ok) {
-            // A failed command write follows the same retry policy as a
-            // failed status read. Returning here would make WriteFailure the
-            // one retryable code that is never retried, which is exactly the
-            // inconsistency that hides a transient backend fault.
-            if (!isRetryable(issued.error)) {
-                return issued;
-            }
-            if (issued.error == IoErrorCode::Timeout) {
-                ++timeoutCount_;
-            }
-            lastCode = issued.error;
-            lastError = issued.message;
-            continue;
+        step = writeStatusPort(config_.writeCommand, address);
+        if (!step.ok) {
+            return step;
         }
 
-        // 3. Wait for the EC to acknowledge before presenting data.
-        IoResult filled = waitForStatus(config_.obfMask, true, "output buffer");
-        if (!filled.ok) {
-            if (!isRetryable(filled.error)) {
-                return filled;
-            }
-            if (filled.error == IoErrorCode::Timeout) {
-                ++timeoutCount_;
-            }
-            lastCode = filled.error;
-            lastError = filled.message;
-            continue;
+        step = waitForStatus(config_.ibfMask, false, "input buffer after write command");
+        if (!step.ok) {
+            return step;
         }
 
-        // 4. Present the data byte.
-        IoResult written = backend_.writePort(config_.dataPort, value);
-        if (written.ok) {
-            writeTrace_.push_back(BusWrite{config_.dataPort, value, address});
-        } else {
-            return written;
+        step = writeDataPort(address, address);
+        if (!step.ok) {
+            return step;
         }
 
-        // 5. The write is only complete once the EC has taken the byte.
-        IoResult completed = waitForStatus(config_.ibfMask, false, "input buffer after write");
-        if (!completed.ok) {
-            if (!isRetryable(completed.error)) {
-                return completed;
-            }
-            if (completed.error == IoErrorCode::Timeout) {
-                ++timeoutCount_;
-            }
-            lastCode = completed.error;
-            lastError = completed.message;
-            continue;
+        step = waitForStatus(config_.ibfMask, false, "input buffer after address");
+        if (!step.ok) {
+            return step;
         }
 
-        return IoResult::success();
-    }
+        step = writeDataPort(value, address);
+        if (!step.ok) {
+            return step;
+        }
 
-    return IoResult::failure(lastCode,
-        "EC write of register 0x" + std::to_string(address) + " failed after "
-            + std::to_string(config_.maximumAttempts) + " attempt(s): " + lastError);
+        // A write is not complete until the EC has taken the byte. Returning
+        // success here without this wait would report a write that may never
+        // have landed, and the caller would skip its readback.
+        return waitForStatus(config_.ibfMask, false, "input buffer after data");
+    });
 }
 
 } // namespace core

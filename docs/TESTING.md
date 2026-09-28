@@ -62,7 +62,7 @@ suites, both hardware-free and both buildable without Windows headers or a drive
 | Suite | Source | Tests | Covers |
 |---|---|---|---|
 | `core_tests` | `tests/core_tests.cpp` | 11 | curves, sensor validation, stuck/stale sources, controller gates, safety states, fan health, RPM plausibility |
-| `ec_protocol_tests` | `tests/ec_protocol_tests.cpp` | 39 | `EcBus` transactions, IBF/OBF waits, timeouts, retry policy, the `0x31` refusal, transaction serialisation |
+| `ec_protocol_tests` | `tests/ec_protocol_tests.cpp` | 42 | `EcBus` transactions, wire sequence, IBF/OBF waits, timeouts, retry policy, the `0x31` refusal, transaction serialisation |
 
 Both are built and run by `tests/run_core_tests.sh`, which is the single entry point
 used by CI on Linux, macOS and Windows. On Windows the same two suites also build as
@@ -117,14 +117,12 @@ The fake models a conventional 0x62/0x66-style EC closely enough to exercise
 `EcBus`, and it is the only thing standing between the code and the hardware. It does
 **not** prove:
 
-- that the real machine uses these ports or this command encoding. Both are
-  **placeholders**; see [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §3 and §9. Phase 0 must
-  measure them read-only before any write is attempted;
-- that the 4-bit address field is wide enough. The placeholder encoding reaches only
-  `0x00`–`0x0F`, while the register map includes `0x31`, so the encoding is
-  demonstrably too narrow for the real map. `EcBus` refuses an address that does not
-  fit rather than truncating it, so the shortfall surfaces as an error instead of a
-  wrong-register write;
+- that the real machine uses these ports or this command encoding. They are
+  **transcribed from `fancontrol/portio.cpp`, not measured**; see
+  [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §3.1 and §9. Phase 0 must confirm them
+  read-only before any write is attempted. The suite pins them against
+  `portio.cpp` so they cannot drift, which guards consistency with the legacy code
+  and says nothing at all about the hardware;
 - anything about a real EC's timing, arbitration, or behaviour under concurrent
   access from the legacy application's own thread (`EcBus`'s mutex covers only
   `EcBus` users — that is T3-06).

@@ -1,4 +1,4 @@
-# Architecture decision records
+﻿# Architecture decision records
 
 This file records decisions that constrain implementation. New decisions should use [templates/ADR.md](templates/ADR.md).
 
@@ -244,7 +244,10 @@ should be superseded.
 
 ## ADR-019 — Refuse an unencodable EC register address instead of truncating it
 
-**Status.** Accepted, T5.
+**Status.** Accepted, T5. **Superseded by ADR-020**, which removes the truncation risk
+at its source by widening the encoding to a full-byte address, so there is no longer
+anything to truncate. The reasoning below still stands as the reason that risk was
+caught and closed rather than shipped.
 
 **Context.** `core/ec_protocol.h` needs a command encoding before any hardware has
 been measured, so that the EC layer is testable at all. The placeholder used is
@@ -294,3 +297,91 @@ constraint. No masking anywhere in the EC path.
 **Revisit conditions.** Superseded by ADR-020 when Phase 0 measures the real
 command encoding, at which point `addressFits` should be replaced by the
 encoding's real address width rather than retained as a fixed 4-bit constant.
+
+## ADR-020 — Adopt the legacy application's two-phase EC command protocol
+
+**Status.** Accepted, T3. Supersedes ADR-019.
+
+**Context.** T5 introduced `EcBusConfig` with a placeholder command encoding of
+`base | address`, carrying a 4-bit address in the low nibble of the command byte.
+That encoding was never verified, and ADR-019 recorded the consequence: only
+`0x00`–`0x0F` were addressable.
+
+Preparing T3-03 — routing the application's EC writes through `EcBus` — required
+reading `fancontrol/portio.cpp`, the legacy application's own EC layer. It records
+a **different** protocol:
+
+```c
+#define EC_DATAPORT        0x1600
+#define EC_CTRLPORT        0x1604
+#define EC_STAT_OBF        0x01
+#define EC_STAT_IBF        0x02
+#define EC_CTRLPORT_READ   (char)0x80
+#define EC_CTRLPORT_WRITE  (char)0x81
+
+WritePort(EC_CTRLPORT, EC_CTRLPORT_READ);   // command byte
+WritePort(EC_DATAPORT,  offset);            // address byte
+*pdata = ReadPort(EC_DATAPORT);             // result
+```
+
+The command byte is an **operation code**, not a base. The register address is a
+**full byte** written separately to the data port.
+
+This is decisive. The register map the application uses is `0x2F` (fan level),
+`0x31` (fan selector), `0x78` and `0xC0` (temperatures), `0x84` (fan speed). Under
+the T5 placeholder **none** of them were addressable. The placeholder was not merely
+unverified; it contradicted every call site in the codebase it was written to
+integrate with.
+
+**Decision.** `EcBusConfig` now models the two-phase protocol recorded in
+`portio.cpp`, with `readCommand = 0x80`, `writeCommand = 0x81`, and a full-byte
+address. The four port and bit constants are likewise taken from that source, and
+`testDefaultCommandBytesMatchTheLegacySource` pins them so they cannot drift
+silently.
+
+`addressFits` and `kAddressBits` are **removed**. With a full-byte address there is
+nothing to truncate, so the hazard ADR-019 guarded against no longer exists and
+keeping a vestigial check would be misleading.
+
+**On the status of these constants.** They are transcribed from the repository, not
+measured. Being in the codebase makes them a record of *what the shipped application
+does*; it does not make them a record of *what the hardware requires*. Generic EC
+documentation describes a `0x62`/`0x66` interface instead, and
+[EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §3 records both mappings as unverified.
+Phase 0 must confirm them read-only before any write is issued. This is recorded as
+a Phase 0 obligation in `EC_REGISTER_MAP.md` §9.1 and must not be read as having
+been softened by the fact that the numbers now come from our own source.
+
+**Alternatives considered.**
+
+1. *Keep the placeholder and translate in the backend.* Rejected: the translation
+   would have to invent an address for every real register, none of which the
+   placeholder could express. It would also mean the tested layer was not the
+   layer that touched the hardware.
+2. *Leave `addressFits` in place "just in case".* Rejected: a permanent check for
+   a condition that cannot occur is a check that will never be exercised, and an
+   unexercised safety check is indistinguishable from a broken one.
+3. *Treat the legacy constants as verified hardware evidence.* Rejected outright.
+   In-repo code is not a measurement, and treating it as one would let the project
+   skip Phase 0 on the strength of a file that nobody has run on the target machine.
+
+**Consequences.**
+
+- The EC suite grows from 39 to 42 tests, and now pins the wire sequence itself
+  (`testTheWireSequenceIsCommandThenAddressThenValue`,
+  `testReadSequenceIsCommandThenAddressThenResult`) and the full address range
+  (`testTheFullByteAddressRangeRoundTrips`), which the old encoding could not have
+  passed.
+- The fan-selector opt-in is now a real capability rather than a formality, because
+  `0x31` is addressable. The single-fan refusal remains the thing that keeps it
+  unused, and `setFanSelectorWritesAllowed` is still never called in product code.
+- A stale result left in the output buffer by an interrupted transaction is now
+  explicitly drained before each transaction
+  (`testStaleResultIsDrainedBeforeATransaction`), matching what the legacy code did
+  informally.
+- ADR-019's refusal is superseded rather than deleted, so the record shows that the
+  hazard was found and closed rather than never noticed.
+
+**Revisit conditions.** Superseded by Phase 0 measurement. The defaults should be
+replaced by whatever `ecdiag` (T5-09) actually observes, and this ADR updated with
+the measurement rather than with an inference from the legacy source.

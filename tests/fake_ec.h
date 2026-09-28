@@ -72,6 +72,13 @@ public:
     void setFault(EcFault fault);
     EcFault fault() const noexcept;
 
+    // The real protocol is two-phase: a command byte on the status port, then
+    // the address on the data port, then the value for a write. This exposes
+    // which phase the bus is in, so a test can assert the sequence rather than
+    // only the end result.
+    enum class Phase { Idle, AwaitingAddress, AwaitingValue, DrainingStale };
+    Phase phase() const noexcept;
+
     // Fail exactly the next `count` port operations, read or write. Models a
     // transient backend error as distinct from a persistent one.
     void failNextOperations(int count);
@@ -129,7 +136,13 @@ private:
     std::uint8_t statusByte_ = 0;
     bool inputBufferFull_ = false;
     bool outputBufferFull_ = false;
-    bool awaitingDataByte_ = false;
+    Phase phase_ = Phase::Idle;
+    // The real EC latches a command byte, asserts IBF while it processes it,
+    // then releases IBF. Modelled as "IBF clears on the next status read",
+    // which is the smallest behaviour that is faithful: the bus must actually
+    // observe a clear, or every wait would time out and the transaction would
+    // never be exercisable.
+    bool ibfClearsOnNextStatusRead_ = false;
     std::uint8_t pendingAddress_ = 0;
     bool pendingIsWrite_ = false;
 

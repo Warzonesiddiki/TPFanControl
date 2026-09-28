@@ -21,7 +21,7 @@ Legend:
 | Measure | Value |
 |---|---|
 | Documented safety gaps closed | 6 of 10 (gaps 1, 2, 3, 4, 5, 8) |
-| Portable-core test functions | 11 core + 39 backend/EC = 50, 270 `CHECK` assertions |
+| Portable-core test functions | 11 core + 42 backend/EC = 53, 296 `CHECK` assertions |
 | Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5 6 of 11: 05, 06, 07, 08, 10 complete; 04 in progress; 02 blocked |
 | Critical path | T0 → T1 → T5 → T3 → T4 → T6 → T8 |
 | Biggest single risk | The portable core is not connected to the application. It is compiled by the project and tested, but no legacy file includes a core header, so the safety state machine is dead code that can drift from shipped behaviour indefinitely without any signal. |
@@ -224,12 +224,19 @@ recorded as awaiting CI evidence rather than as done.
 - The EC port mapping and command encoding are **candidate values**, not hardware
   facts. Phase 0 must establish them by read-only measurement before any write is
   attempted. See [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §3 and §9.
-- **The placeholder encoding cannot address the real register map.** The address field
-  is 4 bits, so only `0x00`–`0x0F` are addressable — but the register map includes
-  `0x31`. This is a further, independent reason the encoding must be measured rather
-  than assumed: the current one is not merely unverified, it is demonstrably too narrow
-  for the job. The bus refuses unencodable addresses rather than truncating them, so
-  the shortfall is a visible error and not a wrong-register write.
+- **The T5 placeholder encoding was contradicted by the legacy source.** Preparing
+  T3-03 meant reading `fancontrol/portio.cpp`, which records a different protocol
+  entirely: a command byte (`0x80` read, `0x81` write) followed by a **full-byte**
+  address on the data port. Under the T5 placeholder, `0x2F`, `0x31`, `0x78`, `0x84`
+  and `0xC0` were all unreachable — *every* register the application uses. `EcBus` now
+  models the protocol the source records (ADR-020), and
+  `testDefaultCommandBytesMatchTheLegacySource` pins the constants so they cannot
+  drift from `portio.cpp` silently.
+- **The constants are transcribed, not measured.** Being in the repository is a record
+  of what the shipped application does; it is not a record of what the hardware
+  requires, and generic documentation describes a different `0x62`/`0x66` interface
+  entirely. Phase 0 must still confirm them read-only. This must not be skipped on the
+  argument that the numbers came from our own source.
 - A uniformly stuck sensor set is **not detectable** from a single source. The tests
   assert this limitation directly rather than working around it, and pin the property
   that does hold: one stuck source cannot mask or mask-out a differing source.

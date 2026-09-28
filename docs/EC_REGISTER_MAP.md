@@ -41,32 +41,37 @@ EcPortStatus=unverified
 
 `0x0000` means “not approved”; it must prevent control from starting.
 
-### 3.1 The command encoding in `core/ec_protocol.h` is a placeholder, not a claim
+### 3.1 The command encoding in `core/ec_protocol.h` is transcribed, not verified
 
-`fancontrol/core/ec_protocol.h` defines a default `EcBusConfig` so the EC layer is
-well-defined and testable before any hardware has been measured. Those defaults
-(`statusPort` `0x62`, `dataPort` `0x66`, read base `0x80`, write base `0xC0`) are
-**placeholders chosen to be well-formed, not values believed to be correct for any
-machine.** They are not hardware evidence, they are not a recommendation, and they
-must be replaced by measurement during Phase 0 before a single write is issued.
+`fancontrol/core/ec_protocol.h` models the two-phase protocol that
+`fancontrol/portio.cpp` records:
 
-Two properties of the placeholder are worth recording because they are the kind of
-thing that silently becomes load-bearing:
+```c
+WritePort(EC_CTRLPORT, 0x80 or 0x81);  // read or write operation
+WritePort(EC_DATAPORT, address);      // full-byte register address
+WritePort(EC_DATAPORT, value);        // write only
+value = ReadPort(EC_DATAPORT);        // read only
+```
 
-- **The command bases must differ in their high nibble.** An earlier draft used
-  `0x10`/`0x11`, which differ only in a low bit. That makes reading register 1 and
-  writing register 0 emit the same byte, so the layer cannot tell a read from a write.
-  It was caught by a test, not by inspection. `EcBusConfig` now refuses an ambiguous
-  encoding and names the colliding register.
-- **A 4-bit address field is too narrow for this register map.** The address occupies
-  the low nibble of the command byte, so the placeholder can address only `0x00`–`0x0F`,
-  while the map in §2 includes `0x31`. The current code therefore **refuses** an address
-  that does not fit rather than masking it — masking would turn a write to `0x2A` into a
-  silent write to `0x0A`, a different register, with no error reported.
+with `EC_CTRLPORT` `0x1604`, `EC_DATAPORT` `0x1600`, `EC_STAT_OBF` `0x01` and
+`EC_STAT_IBF` `0x02`. See ADR-020.
 
-The second point is a concrete demonstration that the placeholder is inadequate rather
-than merely unverified. Treat any default in `EcBusConfig` as something to be measured
-and replaced, never as a starting point for probing the hardware.
+**These are transcribed from this repository, not measured on hardware.** Being in
+the codebase makes them a record of what the shipped application *does*; it does
+not make them a record of what the hardware *requires*. Generic EC documentation
+describes a `0x62`/`0x66` interface instead, and §3 records both mappings as
+unverified. Phase 0 must confirm them read-only before any write is issued.
+
+This distinction matters enough to be stated twice. It would be easy to argue that
+constants lifted from a working program must be correct, and to skip Phase 0 on
+that basis. They come from a program that has not been run against the target
+machine by anyone on this project, and the generic documentation disagrees.
+
+An earlier design encoded the address into the command byte instead, leaving only
+four addressable registers. That could not reach `0x2F`, `0x31`, `0x78`, `0x84` or
+`0xC0` — **every register the application uses** — so it was not a plausible
+placeholder but a contradiction of the code it was meant to integrate with. ADR-019
+and ADR-020 record that history and the reasoning.
 
 ## 4. Fan command semantics
 
@@ -157,8 +162,8 @@ enabled, Phase 0 must establish by **read-only** measurement:
 |---|---|---|
 | status and data ports | `0x62` / `0x66` | §3 documents two competing mappings, `0x62`/`0x66` and `0x1600`/`0x1604` |
 | IBF/OBF status bit positions | `0x02` / `0x01` | not recorded as verified anywhere in the legacy source |
-| read command encoding | base `0x80`, 4-bit address | demonstrably too narrow — cannot reach `0x31` |
-| write command encoding | base `0xC0`, 4-bit address | as above, and it is the path that moves hardware |
+| read/write command bytes | `0x80` / `0x81` | transcribed from `portio.cpp`, never measured |
+| whether the address really is a full byte on the data port | assumed | a shorter address field would silently alias registers again |
 | timeout and poll budget | 50 ms / 1 ms | a bound that is too long delays failsafe; too short causes spurious fallbacks |
 
 None of these may be probed by writing to an unknown register. The legacy application

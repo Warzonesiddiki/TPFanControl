@@ -106,20 +106,30 @@ core::IoResult FakeEcBackend::readPort(std::uint16_t port)
     }
 
     if (port == config_.statusPort) {
+        if (ibfClearsOnNextStatusRead_) {
+            ibfClearsOnNextStatusRead_ = false;
+            inputBufferFull_ = false;
+        }
         refreshStatus();
         return core::IoResult::success(statusByte_);
     }
     if (port == config_.dataPort) {
         if (!outputBufferFull_) {
             // Reading the data port with an empty output buffer is a protocol
-            // error, not a legitimate zero. This is also how the mutex test
-            // detects an interleaved transaction.
+            // error, not a legitimate zero. This is also how an interleaved
+            // transaction shows up: a second reader would take the first
+            // reader's result.
             return core::IoResult::failure(core::IoErrorCode::ReadFailure,
                 "data port read while the output buffer was empty");
         }
         if (fault_ == EcFault::CorruptReadback) {
             return core::IoResult::success(static_cast<std::uint8_t>(dataByte_ ^ 0xFF));
         }
+        // A read of the data port always consumes the result, whether the bus
+        // is taking a fresh answer or draining a stale one.
+        outputBufferFull_ = false;
+        phase_ = Phase::Idle;
+        refreshStatus();
         return core::IoResult::success(dataByte_);
     }
     return core::IoResult::success(0);
@@ -152,63 +162,69 @@ core::IoResult FakeEcBackend::writePort(std::uint16_t port, std::uint8_t value)
     }
 
     if (port == config_.statusPort) {
-        // Classified through the same config the bus uses, rather than guessed
-        // from a bit: a bit heuristic cannot tell a read from a write when the
-        // two command bases differ only in a low bit.
+        // A status-port write that is neither operation code is a corrupted or
+        // mis-encoded command, and is refused rather than interpreted.
         const core::EcBusConfig::CommandKind kind = config_.classifyCommand(value);
         if (kind == core::EcBusConfig::CommandKind::Unknown) {
             return core::IoResult::failure(core::IoErrorCode::Unsupported,
                 "command byte 0x" + std::to_string(value)
-                + " matches neither the read nor the write command base");
+                + " matches neither the read nor the write command");
         }
         committedWrites_.push_back(Write{port, value});
-        pendingAddress_ = core::EcBusConfig::addressOf(value);
         pendingIsWrite_ = (kind == core::EcBusConfig::CommandKind::Write);
-        awaitingDataByte_ = pendingIsWrite_;
+        phase_ = Phase::AwaitingAddress;
 
         if (fault_ == EcFault::InputBufferStuck) {
             inputBufferFull_ = true;
             refreshStatus();
             return core::IoResult::success();
         }
-
         if (fault_ == EcFault::OutputBufferStuck) {
-            // The command is accepted and the input buffer clears, but the EC
-            // never presents a result, so the output buffer never fills.
+            // The command is accepted but the EC never produces a result, so
+            // the output buffer never fills and the wait for it must time out.
             inputBufferFull_ = false;
             outputBufferFull_ = false;
             refreshStatus();
             return core::IoResult::success();
         }
-
-        inputBufferFull_ = false;
-        outputBufferFull_ = true;
-        if (!pendingIsWrite_) {
-            // A read command presents the register contents immediately.
-            const auto it = registers_.find(pendingAddress_);
-            dataByte_ = (it == registers_.end()) ? 0 : it->second;
-            awaitingDataByte_ = false;
-        } else if (fault_ == EcFault::WriteNeverCompletes) {
-            // The data byte will be accepted but the EC never releases the
-            // input buffer, so the write's completion check must time out.
-            inputBufferFull_ = true;
-        }
+        // A command byte latches the input buffer, exactly as the real EC
+        // does. The bus must wait for it to clear before the next step.
+        inputBufferFull_ = true;
+        ibfClearsOnNextStatusRead_ = true;
         refreshStatus();
         return core::IoResult::success();
     }
 
     if (port == config_.dataPort) {
-        if (!awaitingDataByte_) {
+        if (phase_ != Phase::AwaitingAddress && phase_ != Phase::AwaitingValue) {
             return core::IoResult::failure(core::IoErrorCode::WriteFailure,
-                "data port written while no write was pending");
+                "data port written while no command was pending");
         }
         committedWrites_.push_back(Write{port, value});
-        registers_[pendingAddress_] = value;
-        awaitingDataByte_ = false;
-        if (fault_ != EcFault::WriteNeverCompletes) {
-            inputBufferFull_ = false;
+        if (phase_ == Phase::AwaitingAddress) {
+            pendingAddress_ = value;
+            phase_ = pendingIsWrite_ ? Phase::AwaitingValue : Phase::AwaitingAddress;
+            if (!pendingIsWrite_) {
+                // A read command presents the register contents once the address
+                // has been supplied. OutputBufferStuck suppresses exactly this:
+                // the EC accepted the command and never answers.
+                const auto it = registers_.find(pendingAddress_);
+                dataByte_ = (it == registers_.end()) ? 0 : it->second;
+                outputBufferFull_ = fault_ != EcFault::OutputBufferStuck;
+                phase_ = Phase::Idle;
+            }
+            refreshStatus();
+            return core::IoResult::success();
         }
+        // Awaiting the value of a write.
+        registers_[pendingAddress_] = value;
+        phase_ = Phase::Idle;
         outputBufferFull_ = false;
+        // WriteNeverCompletes: the EC took the byte but never releases the
+        // input buffer, so the completion wait must time out. The register has
+        // still changed, which is the part a test must not paper over.
+        inputBufferFull_ = fault_ == EcFault::WriteNeverCompletes;
+        ibfClearsOnNextStatusRead_ = !inputBufferFull_;
         refreshStatus();
         return core::IoResult::success();
     }
@@ -306,6 +322,11 @@ std::size_t FakeEcBackend::operationCount() const noexcept
     return readLog_.size() + writeLog_.size();
 }
 
+FakeEcBackend::Phase FakeEcBackend::phase() const noexcept
+{
+    return phase_;
+}
+
 void FakeEcBackend::clearLogs()
 {
     writeLog_.clear();
@@ -315,11 +336,21 @@ void FakeEcBackend::clearLogs()
 
 std::vector<std::uint8_t> FakeEcBackend::writtenRegisters() const
 {
+    // The address is the FIRST data-port byte after a write command, and the
+    // value is the second. Reconstructing it here keeps the test assertions in
+    // terms of registers, which is what the requirements are written about,
+    // rather than in terms of byte positions on the wire.
     std::vector<std::uint8_t> addresses;
+    bool expectAddress = false;
     for (const Write& write : committedWrites_) {
-        if (write.port == config_.statusPort
-            && config_.classifyCommand(write.value) == core::EcBusConfig::CommandKind::Write) {
-            addresses.push_back(core::EcBusConfig::addressOf(write.value));
+        if (write.port == config_.statusPort) {
+            expectAddress = (config_.classifyCommand(write.value)
+                == core::EcBusConfig::CommandKind::Write);
+            continue;
+        }
+        if (write.port == config_.dataPort && expectAddress) {
+            addresses.push_back(write.value);
+            expectAddress = false;
         }
     }
     return addresses;
