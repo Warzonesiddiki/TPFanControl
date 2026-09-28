@@ -1,4 +1,4 @@
-﻿# Architecture decision records
+# Architecture decision records
 
 This file records decisions that constrain implementation. New decisions should use [templates/ADR.md](templates/ADR.md).
 
@@ -1084,3 +1084,95 @@ its fan. At that point the mapping's use of `SmartLevels` as the source and its
 refusal of the legacy specials have to be re-examined against the measured
 register map, and the dwell time (today 0, because the cycle timer already paces
 evaluation) has to be justified by something other than a timer.
+
+## ADR-029 — Remove the hardcoded manual-mode exit at 75 °C
+
+**Status.** Accepted, T3. Closes the open item noted in the T3-02 handover
+— `HandleData`'s mode flip `if (CurrentMode==3 && MaxTemp>75) CurrentMode=2; //hello`.
+
+**Context.** The legacy application has two places that try to leave manual
+mode when the machine is hot:
+
+1. `fancontrol.cpp:782` — the UI timer, every few seconds:
+
+   ```cpp
+   if (this->CurrentMode == 3 && this->MaxTemp > this->ManModeExit2){
+       this->ModeToDialog(2);
+       ::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
+   }
+   ```
+
+   `ManModeExit2` is the Celsius form of the configurable `ManModeExit`
+   (default 80, INI key `ManModeExit=`), converted in `misc.cpp:608-614`.
+   It changes the radio buttons via `ModeToDialog(2)`, so the next
+   `CurrentModeFromDialog()` reads Smart.
+
+2. `fanstuff.cpp:321` — at the end of `HandleData()`:
+
+   ```cpp
+   this->PreviousMode = this->CurrentMode;
+   if (this->CurrentMode == 3 && this->MaxTemp > 75) this->CurrentMode = 2; //hello
+   ```
+
+   This sets the *member* `CurrentMode` to 2 (Smart) but does **not** touch the
+   dialog. The next `HandleData` call starts with `CurrentModeFromDialog()`,
+   which overwrites `CurrentMode` from the radio buttons, which still say
+   Manual. The assignment therefore has no persistent effect; it is dead code
+   that looks like a safety guard.
+
+   The comment `//hello` and the magic number `75` have no history, no ADR, and
+   no test. The configurable path (1) is 80 °C by default, so at 76-80 °C the
+   two would disagree even if (2) worked.
+
+**Decision.** Delete (2). Keep (1) as the legacy UI's configurable exit from
+manual mode.
+
+- The magic constant is removed. No new constant replaces it.
+- The safety property — a hot machine does not stay in a user-set low fan
+  level — is kept by the configurable `ManModeExit` path, which is visible in
+  the INI, and by the portable core's emergency handling (`ControllerConfig::
+  emergencyTemperatureC`), which is authoritative once a profile sets it.
+- The core's manual path (`ControllerInput::requestManual`) already has its own
+  expiry (`manualDurationMs`, 15 min) and is cancelled by invalid sensor data
+  (T2-10), and emergency temperature overrides it (T2-11). The legacy manual
+  mode is a different mode (fixed level via dialog edit box), but it now goes
+  through the same core (`SetFan` → `AppBridge::apply` → `Controller::update`),
+  so a future profile can make `emergencyTemperatureC` the single source of
+  truth for the thermal guard.
+
+**Alternatives considered.**
+
+- *Keep the line and make it use `ManModeExit2` and `ModeToDialog`* — would make
+  the two paths agree, but would keep a second, redundant exit that fires from
+  the data cycle rather than the UI timer, and would still be a legacy-only
+  guard when the core already has one.
+- *Route the exit through the core by setting `emergencyTemperatureC` from
+  `ManModeExit2`* — rejected for now: `ManModeExit` is a legacy UI setting with
+  Fahrenheit conversion and a default that predates the core, and wiring it into
+  `ControllerConfig` would couple the INI parser to the core's config. The
+  mapping belongs to a future T6 profile task, with hardware evidence for the
+  threshold.
+- *Keep the line as-is with a comment* — rejected: a magic number with `//hello`
+  is not a documented safety rule, and a guard that does not change the dialog
+  is not a guard.
+
+**Safety impact.** Removes dead code that looked like a safety exit but was not.
+No new register write, no new driver interaction, no change to the control
+path. The effective behaviour at 76-80 °C changes from "internal variable
+flipped for one cycle, then overwritten" to "stays in manual until
+`ManModeExit`", which is the behaviour a user configuring `ManModeExit=` would
+expect. At >80 °C both old and new code leave manual via the timer path.
+
+**Testing and evidence.** No portable-core test covers this Win32 timer; it
+cannot be exercised here. `scripts/check_legacy_ec.py` still passes (it guards
+the smart-table decision and fan writes, not this line). The change is a
+deletion, so `check_core_bootstrap.py` and `check_projects.py` are unaffected.
+Verified by grepping the tree for `> 75` after the edit and confirming no other
+hardcoded manual-exit remains.
+
+**Revisit conditions.** When T6 defines the T14 profile's emergency threshold,
+`ManModeExit` should be evaluated against it: if the profile's emergency is
+lower than the INI default, the INI default should be lowered or the core's
+emergency made the only guard. If manual mode is kept long-term, its exit
+should be expressed as a core policy (expiry + emergency) rather than a UI
+timer.
