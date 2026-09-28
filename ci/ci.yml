@@ -1,9 +1,10 @@
-﻿name: CI
+name: CI
 
 # Tasks covered:
 #   T1-08  portable core tests on Linux, macOS and Windows
-#           (all six suites: core_tests, ec_protocol_tests, app_bridge_tests,
-#            legacy_policy_tests and legacy_backend_tests)
+#           (all seven suites: core_tests, ec_protocol_tests, app_bridge_tests,
+#            ecdiag_tests, legacy_policy_tests and legacy_backend_tests)
+#           plus the ecdiag tool itself, built and smoke-tested
 #   T1-09  Release build with warnings-as-errors on the core
 #   T1-10  git diff --check and a link check
 #   T1-11  Windows test target
@@ -53,7 +54,7 @@ jobs:
           mkdir -p "$BUILD_DIR"
           CXX="${CXX:-g++}"
           for suite in core_tests ec_protocol_tests app_bridge_tests \
-                       legacy_policy_tests legacy_backend_tests; do
+                       ecdiag_tests legacy_policy_tests legacy_backend_tests; do
             # core_tests uses the fake backend; the EC suites use the fake EC.
             # legacy_policy_tests supplies its own doubles inline and needs no
             # fake. legacy_backend_tests does need fake_ec.cpp - for FakeClock,
@@ -86,7 +87,7 @@ jobs:
           # still exits 0, so this is verified rather than assumed.
           # See tests/test_check.h.
           for suite in core_tests ec_protocol_tests app_bridge_tests \
-                       legacy_policy_tests legacy_backend_tests; do
+                       ecdiag_tests legacy_policy_tests legacy_backend_tests; do
             # core_tests uses the fake backend; the EC suites use the fake EC.
             # legacy_policy_tests supplies its own doubles inline and needs no
             # fake. legacy_backend_tests does need fake_ec.cpp - for FakeClock,
@@ -147,6 +148,7 @@ jobs:
           out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\core_tests.exe
           out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\ec_protocol_tests.exe
             out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\app_bridge_tests.exe
+            out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\ecdiag_tests.exe
             out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\legacy_policy_tests.exe
             out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\legacy_backend_tests.exe
 
@@ -169,7 +171,8 @@ jobs:
       - name: Build Release test targets with warnings-as-errors
         run: >
           msbuild tests\core_tests.vcxproj tests\ec_protocol_tests.vcxproj
-                        tests\app_bridge_tests.vcxproj tests\legacy_policy_tests.vcxproj
+                        tests\app_bridge_tests.vcxproj tests\ecdiag_tests.vcxproj
+                        tests\legacy_policy_tests.vcxproj
                         tests\legacy_backend_tests.vcxproj
           /m
           /p:Configuration=Release
@@ -186,6 +189,7 @@ jobs:
           out\tests\x64\Release\core_tests.exe
           out\tests\x64\Release\ec_protocol_tests.exe
             out\tests\x64\Release\app_bridge_tests.exe
+            out\tests\x64\Release\ecdiag_tests.exe
             out\tests\x64\Release\legacy_policy_tests.exe
             out\tests\x64\Release\legacy_backend_tests.exe
 
@@ -196,7 +200,7 @@ jobs:
         shell: pwsh
         run: |
           $log = Get-Content build-core-wx.log -Raw
-          $coreUnits = @('core_types', 'sensor_validation', 'fan_curve', 'controller', 'io_backend', 'ec_protocol', 'app_bridge', 'legacy_policy', 'legacy_backend')
+          $coreUnits = @('core_types', 'sensor_validation', 'fan_curve', 'controller', 'io_backend', 'ec_access', 'ec_protocol', 'ecdiag', 'app_bridge', 'legacy_policy', 'legacy_backend')
           $fail = @()
           foreach ($u in $coreUnits) {
             $lines = $log -split "`r?`n" | Where-Object { $_ -match "$u\.cpp" -and $_ -match '\bcl\.exe\b|compiler' }
@@ -282,6 +286,21 @@ jobs:
           [ "$bad" -eq 0 ]
           echo "all shell scripts have a clean shebang"
 
+      - name: The ecdiag tool cannot reach anything that writes
+        # T5-09. ecdiag is read-only by construction: it is handed an interface
+        # with one read operation and no write member, which holds only while its
+        # include closure stays closed. One convenient include would put EcBus and
+        # writeRegister back within reach, and nothing else in the build would say
+        # so. This also refuses to pass if the runtime trace assertions in
+        # tests/ecdiag_tests.cpp have been deleted, because a structural guarantee
+        # whose runtime evidence is gone is a guarantee nobody is checking.
+        #
+        # The self-test runs first and proves the rules still match what they claim
+        # to, which is the failure mode that has actually bitten this repository.
+        run: |
+          python3 scripts/check_ecdiag_readonly.py --selftest
+          python3 scripts/check_ecdiag_readonly.py
+
       - name: Markdown link check
         run: python3 scripts/check_links.py
 
@@ -344,7 +363,8 @@ jobs:
       - name: Analyse the core
         run: >
           msbuild tests/core_tests.vcxproj tests/ec_protocol_tests.vcxproj
-                        tests/app_bridge_tests.vcxproj tests/legacy_policy_tests.vcxproj
+                        tests/app_bridge_tests.vcxproj tests/ecdiag_tests.vcxproj
+                        tests/legacy_policy_tests.vcxproj
                         tests/legacy_backend_tests.vcxproj
           /p:Configuration=Release
           /p:Platform=x64
