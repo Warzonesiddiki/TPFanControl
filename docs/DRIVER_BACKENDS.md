@@ -41,6 +41,22 @@ Phase 1 should answer these questions instead of assuming the answer:
 
 Record the result in the Phase 0/Phase 1 report. The project must not silently require the user to disable Windows security features.
 
+The adapter that asks those questions from code is
+[`fancontrol/core/tvicport_backend.h`](../fancontrol/core/tvicport_backend.h)
+(T5-01): `attach()` opens the driver if it is not already open, records what
+`TestHardAccess()` says, and requests hard access only when the caller asked for
+it — the legacy application calls `SetHardAccess(true)` unconditionally, and
+reproducing that silently is exactly what ADR-026 refuses. `HardAccessReport`
+carries the three facts this section's questions produce, so the Phase 0 report
+can quote them rather than reconstruct them. It has not been run against a
+driver; see [DEPENDENCIES.md](DEPENDENCIES.md) §4.6 for what is still open.
+
+The artefact in this repository does not answer any of those questions, and it
+does block one of them: the vendored import library is 32-bit (all 51 COFF
+members are `pe-i386`), so an x64 link cannot use it. See
+[DEPENDENCIES.md](DEPENDENCIES.md) §4.4, which is also where the vendor's
+licensing terms and the product family's vulnerability record are written down.
+
 ## 4. PawnIO feasibility
 
 PawnIO is a candidate modern backend. Treat it as an external dependency whose current official API, module format, signing model, licensing, and supported architectures must be verified from the official distribution before coding against it.
@@ -80,6 +96,20 @@ Leave fan control to BIOS.
 Explain the missing dependency to the user.
 ```
 
+The words in that block are load-bearing, and T5-04 is where they were turned
+into a decision. *If possible* is doing real work: the temperature sources on
+this machine are embedded-controller registers, so with no backend there is
+nothing to read, and "monitor-only" would be a window of zeros rather than a
+monitor. `core::assessStartup()` therefore reports three modes rather than two —
+`NoBackend` (no readings, nothing to display, fan with the firmware),
+`MonitorOnly` (readings shown, no register written, the blocking reason named)
+and `ControlEligible` (still not an activation; see ADR-014 and ADR-027) — and
+never returns a blank status string, because a blank one reads as "fine". The
+same decision supplies the text for the message the startup path shows when the
+driver is missing, so what the user is told and what the code decided cannot
+drift apart. ADR-027 records why this is core code and not an `if` chain in the
+Win32 dialog.
+
 Do not disable Secure Boot, HVCI, or the vulnerable-driver blocklist as part of normal installation.
 
 ## 6. x64 and Win32 policy
@@ -90,7 +120,7 @@ Do not advertise Win32 compatibility merely because the source compiles. Record 
 
 | Backend | Win32 app | x64 app | Secure Boot | HVCI | Control allowed |
 |---|---|---|---|---|---|
-| TVicPort | Not tested | Not tested | Not tested | Not tested | No decision |
+| TVicPort | Not tested | Cannot link: the vendored import library is 32-bit ([DEPENDENCIES.md](DEPENDENCIES.md) §4.4) | Not tested | Not tested | No decision |
 | PawnIO | Not tested | Not tested | Not tested | Not tested | No decision |
 | Fake backend | Test only | Test only | N/A | N/A | Never hardware |
 
@@ -119,3 +149,6 @@ The UI should display an actionable message without exposing unsafe remediation 
 - Store checksums for installers or downloaded packages.
 - Prefer a user-installed official driver over silently bundling a kernel component.
 - Test uninstall and rollback before recommending installation.
+- The record this policy requires is [DEPENDENCIES.md](DEPENDENCIES.md):
+  checksums for the artefacts in the tree, the ten fields above per dependency,
+  and `scripts/check_dependencies.py` to fail the build when it goes stale.

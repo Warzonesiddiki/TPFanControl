@@ -583,3 +583,504 @@ establishes the first. The second still does not exist (ADR-021).
 **Revisit conditions.** Never for the deny-by-default direction. If a future
 need requires register writes on a machine that has not been verified, that need
 is a safety defect, not a feature.
+
+## ADR-024 — The read-only diagnostic is read-only by construction
+
+**Status.** Accepted, T5-09.
+
+**Context.** `ecdiag` is the tool that will collect Phase 0's read-only EC
+evidence (T4-07 … T4-12). Its whole value is that it cannot write. `EC_REGISTER_MAP.md`
+§10 records how the previous application already failed exactly this test: the
+fan-selector write sat in `SetFan()` for years, four writes per attempt, without
+anyone having decided to put it there. A rule that a diagnostic must not write is
+therefore in the same category as a comment saying "do not write to register X":
+it is true until somebody edits the file for an unrelated reason.
+
+Two weaker designs were rejected before this one.
+
+*Rejected: a runtime flag.* A `--no-write` option, or a bus configured with
+writes disabled, produces a tool that does not write **today**. The write path is
+still present, compiled, and reachable by any future edit that flips a flag, and
+no test would fail if it were flipped — the test suite would simply be exercising
+a different configuration.
+
+*Rejected: a static rule against calling `writeRegister`.* This is closer, but a
+rule about calls is only as good as its patterns. The same reasoning as ADR-023:
+a guard that cannot fire reads as protection while the tree is unprotected. A
+grep for `writeRegister` does not fail when somebody adds a new write-capable
+function and calls that instead.
+
+**Decision 1 — the read-only constraint is the type system's job.**
+
+The EC *configuration* and the *read-only seam* live in `core/ec_access.h`, a
+header that declares no write operation anywhere:
+
+- `EcBusConfig` — ports, masks, command bytes, timeouts, and the validation of
+  those values;
+- `IRegisterReader` — one read operation and one audit method, with no write
+  member to add by accident;
+- `ReaderAudit` — the reader's own account of what it did.
+
+`core/ec_protocol.h` includes `ec_access.h` and adds the transactions, `EcBus`,
+and `EcBusReader` (the seam that adapts a bus to `IRegisterReader`).
+`core/ecdiag.{h,cpp}` and `tools/ecdiag/` include `ec_access.h` and never
+`ec_protocol.h`, so `EcBus` and `writeRegister` are not merely unused by the
+diagnostic: they are not nameable from its translation units.
+
+**Decision 2 — the closure is guarded, because a closed closure is not
+self-maintaining.**
+
+One convenient `#include "ec_protocol.h"` restores the ability to name a write,
+and nothing else in the build would say so. `scripts/check_ecdiag_readonly.py`
+therefore walks the tool's include closure transitively, refuses any header that
+is not on a short commented allowlist, refuses any write API, write-enabling call
+or bus/bridge name in the tool's own sources, and refuses to pass if the runtime
+trace assertions in `tests/ecdiag_tests.cpp` have been deleted. A header that
+cannot be resolved is a violation rather than a skip, so the check cannot quietly
+cover less than it claims.
+
+**Decision 3 — the claim is also checked at runtime, against two witnesses.**
+
+`tests/ecdiag_tests.cpp` drives a complete run through a **real `EcBus`** over the
+fake EC and then asserts on two independent records: the bus's own write trace,
+and the fake's log of registers whose value actually changed. "Attempted" and
+"took effect" are different claims (ADR-023), and the tests assert on both. The
+engine additionally treats a *write command byte on the status port* as an
+invariant violation that outranks every other outcome, so a future regression
+produces a report that says the run is a defect rather than a measurement.
+
+**Consequences.**
+
+- `ec_protocol.h`'s include of `ec_access.h` is the only direction of dependency.
+  Splitting the configuration out was a real cost: every translation unit that
+  uses `EcBusConfig` now also needs `ec_access.cpp`, which is how four of the five
+  Windows test projects came to be unable to link. The fix added the file and
+  `scripts/check_project_sources.py` to keep it added.
+- The tool cannot perform a hardware read until a backend exists (T5-01, T5-02),
+  and it says so: every `--backend` name exits 4 with the reason.
+- A future maintainer who needs a write in the diagnostic cannot add one quietly.
+  They have to change this ADR and the guard in the same diff, which is the point.
+
+**Revisit conditions.** When a backend exists, the seam is extended — a
+read-only method — never widened to a write. If a future diagnostic genuinely
+needs a write, that is a different tool with a hardware gate, and this ADR is the
+record of what would have to be re-decided.
+
+
+## ADR-025 — TVicPort is a documented baseline, never the shipping backend
+
+**Status.** Accepted, T5-11. Applies [DRIVER_BACKENDS.md](DRIVER_BACKENDS.md) §5 and §8 and [SECURITY.md](SECURITY.md) §3 to the one external dependency this repository actually contains.
+
+**Context.** T5-11 asks for a dependency record. Writing it turned up four
+findings that are decisions rather than fields:
+
+1. The vendored import library is 32-bit — all 51 COFF members are `pe-i386` —
+   while the solution declares `Debug|x64` and `Release|x64` for the
+   application, and the project lists the library in all four configurations.
+2. The vendor states the free package is for personal, non-commercial use, and
+   that the licence to "redistribute the driver with your application" is the
+   commercial one.
+3. The product family's 64-bit driver is catalogued as a vulnerable driver:
+   CVE-2026-30769 (CVSS 3.1 7.8, local privilege escalation via IOCTL
+   `0x80002008`, no vendor fix at the time of writing) and a LOLDrivers entry
+   describing device `\\.\TVicPortDevice0` with no DACL.
+4. `LICENSE` attributed the library to a person whose name appears in neither
+   the artefact nor the vendor's site, and pointed at a task (`T0-07`) that is
+   `CONTRIBUTING.md`.
+
+**Decision 1 — the record is an artefact, and it is checked.**
+
+`docs/DEPENDENCIES.md` carries the ten SECURITY.md §3 fields for every
+dependency, each field labelled with how it is known (verified here, vendor
+statement, third-party report, not established). `scripts/check_dependencies.py`
+fails when a recorded checksum or size no longer matches the file on disk, when
+a dependency section is missing one of the ten fields, or when a tracked
+`.lib`/`.dll`/`.sys`/`.exe`/`.msi`/`.cab`/`.zip` has no checksum row. It has its
+own eight-case self-test.
+
+**Decision 2 — no kernel component is redistributed, and nothing asks a user to
+weaken a machine.**
+
+The driver is not in this repository and is not going into it. The import
+library's redistribution basis is recorded as **not established**, and `LICENSE`
+now claims only what the vendor's page supports. Whether the driver loads under
+Secure Boot, HVCI or the vulnerable-driver blocklist is *measured* on the target
+machine (T4-06, T5-03) — never worked around, and never a reason to tell a user
+to disable a protection.
+
+**Decision 3 — TVicPort is not a candidate for the modern backend.**
+
+It stays what it already was: the legacy baseline, measured at T5-01 and T4-06
+so the replacement has something to be compared against. Adoption is closed by
+its security history, not by preference. The modern backend decision belongs to
+T5-02 and is recorded in `DRIVER_BACKENDS.md` §6.
+
+**Alternatives considered.**
+
+- *Keep the record as prose and trust it* — rejected. The field that rots is the
+  checksum, and a record describing a file that is no longer in the tree is
+  worse than no record, because it is quoted.
+- *Delete the import library now* — rejected. It would break the legacy build
+  and the baseline measurement, and the question is a release gate, not a reason
+  to break the tree. The record marks it open and `RELEASE.md` gates it.
+- *Treat the CVE as out of scope because no driver ships here* — rejected. The
+  project's own baseline instruction is to install the vendor package; "not our
+  binary" is not a mitigation, and `DRIVER_BACKENDS.md` §5 requires the security
+  history to be part of the evaluation.
+
+**Safety impact.** No new privileged access, no EC writes, no startup change.
+It removes a plausible future path — bundling or auto-loading a driver — and
+adds a release gate.
+
+**Testing and evidence.** `scripts/check_dependencies.py --selftest` (8 fixtures,
+including a tampered hash and an unrecorded artefact); the live run over the tree
+(2 dependency sections with all ten fields, 2 artefacts hashed and matched, 1
+tracked binary artefact recorded); the TVicPort hashes were taken from the
+committed files. No hardware claim is made anywhere in the record.
+
+**Consequences.** The x64 link gap is written down rather than latent — see
+`BUILD.md` §5 and `DEPENDENCIES.md` §4.4. `LICENSE`'s TVicPort exception is now
+accurate. A future commit that adds a binary without recording it fails the
+hygiene job instead of passing review.
+
+**Revisit conditions.** A commercial licence is obtained and a 64-bit package is
+recorded (the CVE still applies to file version 5.2.1.0, so a fixed version
+would be required); or T5-02 selects PawnIO and its ten fields are completed; or
+the baseline is dropped entirely and the import library leaves the tree.
+
+## ADR-026 — The TVicPort adapter does not turn on hard access by itself
+
+**Status.** Accepted, T5-01. Amends the behaviour of the legacy application; does not change it.
+
+**Context.** T5-01 asks for a TVicPort adapter implementing `IIoBackend`, so
+the baseline can be compared with a modern backend on the target machine
+(T4-06). Writing it meant reading `fancontrol/approot.cpp` again, and the
+sequence there is:
+
+```cpp
+HardAccess = TestHardAccess();
+SetHardAccess(NewHardAccess);   // NewHardAccess = true, unconditionally
+HardAccess = TestHardAccess();  // and the result is never looked at
+```
+
+TVicPort's hard access is the mode in which the driver performs port I/O even
+when its own probe says the I/O is not safe to perform on that machine. The
+legacy code turns it on every time, before it has any idea what the machine is,
+and then ignores what the driver says about the result. `SetHardAccess` is also
+the only entry point in the vendored library that changes a driver setting
+rather than reading or writing a port.
+
+There is no third option in which this is neutral. Either the adapter copies the
+call - and then a new binary, on an unverified machine, silently changes a
+driver setting, in a code path nobody decided anything in - or it does not, and
+the difference has to be written down somewhere a reviewer will find it.
+
+**Decision 1 — the default is not to ask.**
+
+`TvicPortOptions::requestHardAccess` is false. `attach()` records
+`TestHardAccess()` in a `HardAccessReport`, and calls `SetHardAccess(true)` only
+when the caller set that option. When the driver reports hard access unavailable
+and nothing was asked for, `attach()` still succeeds: reads are attempted, the
+driver's answer is recorded, and the run is a monitor-only run that says so.
+Refusing to attach would be worse, because it would hide the machine's real
+state behind a failure.
+
+**Decision 2 — the decision is recorded, not just taken.**
+
+`HardAccessReport` carries whether the driver reported hard access available,
+whether this adapter asked for it, whether `SetHardAccess` was called, whether
+this adapter opened the driver or found it open, and a message saying which.
+A hardware report that cannot state this cannot claim the baseline ran in the
+same mode as the shipped application, and that comparison is the reason T5-01
+exists.
+
+**Decision 3 — the legacy application keeps its own behaviour, unchanged.**
+
+`approot.cpp` still calls `SetHardAccess(true)`. It is being *measured*, and a
+measurement taken through code that had already been changed is not a
+measurement of the thing the users have. The adapter is the modern path; the
+legacy path is evidence. When a backend is chosen, the legacy path's fate is
+T5-02's successor task and T1/T3's, not this one.
+
+**Alternatives considered.**
+
+- *Copy the legacy call so the two paths behave identically* — rejected. It
+  optimises for comparison and pays with a silent driver-setting change on every
+  machine, made by code that has no way to know whether the setting is
+  appropriate.
+- *Refuse to attach when hard access is unavailable* — rejected. It converts a
+  diagnosable state ("the driver will not do port I/O here") into a failure
+  message, and removes the monitor-only mode that works in exactly that state.
+- *Read the setting back and report it, without offering to change it at all* —
+  rejected as too rigid: a person with the machine in front of them, and a
+  reason, has to be able to ask for it. The option is how they ask, and it is
+  recorded.
+
+**Safety impact.** The change reduces what the software does to a machine: one
+driver setting is no longer changed without a caller asking. No new privileged
+access; no EC writes; no startup behaviour change; nothing loads a driver. The
+adapter cannot make a register-level decision in either direction — it forwards
+port values, including 0x31 and 0x2F, and a test asserts that it does, because
+refusing those is `EcBus`'s job (ADR-021, ADR-023).
+
+**Testing and evidence.** `tests/tvicport_backend_tests.cpp` (19 tests) covers
+the lifecycle against a fake DLL: construction touches nothing, attach is
+idempotent, a failed open is typed and leaves nothing open, an already-open
+driver is neither reopened nor closed, `SetHardAccess` is called zero times
+unless asked for and exactly once with `true` when it is, an available hard
+access is not touched even when the option is set, a driver closed behind the
+adapter's back stops every port call, ports and all 256 byte values arrive
+unchanged, and the trace records every call. Not covered, and not claimed: any
+interaction with a real driver, on real hardware, under any security
+configuration. There is no Windows machine here; T4-06 is where this is measured.
+
+**Consequences.** `scripts/check_ci_steps.py` immediately earned its keep: adding
+the suite to the workflow's sanitizer loop exposed that `run_core_tests.sh`'s
+core-source list was missing `tvicport_backend.cpp`, so the suite could not link
+in the step that runs the real script. The primitive mapping now exists once —
+`makeTvicPortPrimitives`, used by both the adapter and `fanstuff.cpp`, which
+previously wrote the same two lambdas out by hand. The DLL's entry points are
+named in exactly one file, `fancontrol/tvicport_dll.cpp`.
+
+**Revisit conditions.** When T4-06 measures the baseline and the answer is that
+hard access is required on the target machine, that finding is recorded in the
+Phase 0 report and the option is set by the code that constructs the baseline
+run — with the report as its justification. If a future backend makes this
+switch irrelevant, this ADR is superseded rather than deleted, because the
+question will come back with the next vendor library.
+
+## ADR-027 — The application starts the core through a public seam, and a machine with no backend is monitor-only with no readings
+
+**Status.** Accepted, T5-04. Fills a gap in the T3 work rather than changing it.
+
+**Context.** T5-04 asks for monitor-only behaviour when the backend is absent.
+Writing the tests for it turned up a defect that had been in the tree since the
+T3 integration landed:
+
+`FANCONTROL::CoreInit()` existed, was documented in three places, was named in
+the checklist as the thing that wires the core up, and **had no caller**. So
+`CoreBridge` was always null, and every path that could move the fan ended at
+`"FAILED!! (core not initialised)"`. The safety property held - nothing was
+written - but the integration that T3 describes was dead code, and the
+checklist's own "biggest single risk" line (*the portable core is not connected
+to the application*) had quietly become true in a way that line did not
+describe.
+
+It could not have been caught by any test in this repository, and it could not
+have been caught by the compiler either, for the same reason: `CoreInit` sat in
+the `protected:` section of `FANCONTROL` while the startup path, `approot.cpp`,
+is a free function. The call that was needed was not *missing* - it was
+**impossible to write**. Each file reads correctly on its own; the defect exists
+only in the relationship between two files, which is exactly the shape that no
+single-file review and no single-file check can see.
+
+**Decision 1 — the seam is public and narrow.**
+
+`StartCore()` starts the core and traces what it decided; `CoreStatus()` returns
+the decision. `CoreInit` and `CoreShutdown` stay protected: they touch the core
+member by member, and a caller outside the class would have to keep them in
+step. One public entry point, one public accessor, and a check that the seam is
+declared after the `public:` label.
+
+**Decision 2 — the startup decision is portable code, not an if-chain in Win32.**
+
+`core::assessStartup` takes the capability inputs and returns a `StartupAssessment`:
+the mode, whether readings are available, whether control is approved, and two
+strings (a status line and an explanation) that are never empty. Three modes:
+
+| Mode | Readings | May write | Meaning |
+|---|---|---|---|
+| `NoBackend` | no | no | The temperature sources are EC registers, so with no backend there is nothing to read. Say so; leave the fan with the firmware. |
+| `MonitorOnly` | yes | no | Readings are shown; control is not approved (Phase 0), so no register is written. |
+| `ControlEligible` | yes | Phase 0 verdicts hold | Still not an activation: control needs the user's request and the consecutive-samples gate (ADR-014). |
+
+"If possible" in `DRIVER_BACKENDS.md` §5 is doing real work, and this is where it
+lands: **monitor-only does not imply "readings are available"**. A window showing
+zeros because its data source never answered is worse than one that says the
+source is missing.
+
+**Decision 3 — one eligibility rule, not two.**
+
+`assessStartup` does not decide eligibility. It calls
+`CapabilityReport::controlEligible()` - the same predicate the controller applies
+- and a test asserts the two agree for all 128 combinations of the seven
+booleans that can matter. A second rule here would be a second answer, and the
+one the user sees would be the weaker.
+
+That test found the second defect of this task: `monitorOnlyForced` was an input
+the application set (`capabilityInputs.monitorOnlyForced = !CoreHardwareVerified`)
+and **nothing read**. "The user chose monitor-only" was a comment. It is now part
+of `controlEligible()`, checked first, with `monitor_only_forced` as the blocking
+reason.
+
+**Decision 4 — no backend is not a crash, and it is not a blank window.**
+
+The legacy startup path retried `OpenTVicPort()` for 180 seconds and then exited
+with a message box naming `tvicport.sys`. That behaviour is kept - the retry is
+legacy behaviour being measured, and exiting is honest when there is genuinely
+nothing to show - but the *text* now comes from `assessStartup`, so the message,
+the status line and the refusal messages cannot drift apart. What changed is that
+the reason is a decision rather than a hand-written string in one dialog, and the
+same decision is what a running application reports if the driver goes away
+under it.
+
+**Alternatives considered.**
+
+- *Make the core's state public and let `approot.cpp` drive it member by member* —
+  rejected: it puts the startup order in two files, and the order matters (the
+  clock must outlive the bridge; the bridge must be destroyed before the driver
+  closes).
+- *Have `CoreInit` called from `Test()`* — rejected. `Test()` is commented-out
+  experimental ACPI code, and hiding a safety-relevant bootstrap inside a
+  function whose name promises nothing is how this defect happened the first time.
+- *Let the window open with no backend and show empty fields* — rejected. A blank
+  or zeroed temperature pane reads as measurements; the project's own rule is that
+  an unavailable reading must be visibly unavailable.
+- *Ship a `Fatal` mode and exit from the core* — rejected. Exiting is a
+  user-interface decision about whether a window with no data is worth showing,
+  and the core does not know about windows. It reports; the application decides.
+
+**Safety impact.** Strictly downward in what the software does to the machine:
+the bootstrap changes no register by itself, `CoreInit` still builds the bridge
+with `allowRegisterWrites = false` and with every Phase 0 verdict false, and the
+one behavioural addition that could have gone the other way - honouring
+`monitorOnlyForced` - removes a path by which control could have been enabled
+against the operator's explicit choice. Nothing here loads a driver, and nothing
+weakens a Windows security setting.
+
+**Testing and evidence.** `tests/legacy_policy_tests.cpp` grows from 20 to 27
+tests: the three modes, the mid-session "driver closed" case, forced monitor-only
+surviving every verdict, the 128-machine exhaustive agreement with
+`controlEligible()`, and the "never blank" property of both strings.
+`scripts/check_core_bootstrap.py` (7-case self-test) is the static guard for the
+relationship no test can execute: the seam is called from the startup path, it is
+declared public, `StartCore` calls `CoreInit`, and the bridge has exactly one
+construction site. Wired into the CI hygiene job.
+
+**Consequences.** The core is no longer dead code in the shipped application: the
+bridge is built at startup, reads flow through it, and every write goes through
+`AppBridge::apply` or is refused. `SetFan`'s no-core refusal now prints the
+startup explanation instead of `"(core not initialised)"`. The x64 link gap and
+the missing hardware evidence are unchanged - this ADR adds no hardware claim,
+and the application still cannot be compiled in this environment.
+
+**Revisit conditions.** When Phase 0 produces a hardware report,
+`CoreHardwareVerified` becomes true for that machine, `monitorOnlyForced` stops
+being set by default, and the mode becomes `ControlEligible` - at which point the
+activation rules of ADR-014 are the only thing between the user and a moving fan.
+If a second backend arrives, this seam does not change: it takes an `IIoBackend`,
+not a TVicPort.
+
+## ADR-028 — The legacy temperature table becomes the core's curve, and the profile switch re-installs it
+
+**Status.** Accepted, T3-04/T3-05.
+
+**Context.** T3-05 asks for the legacy decision code to be deleted or quarantined
+once the core is authoritative. The last piece of it was `SmartControl()`: two
+scans of the `SmartLevels` table per data cycle, picking a fan value from
+`MaxTemp` and passing it to `SetFan`. T3-04's remaining half was the same thing
+seen from the other side — the *decision* still happened in the legacy code.
+
+Deleting a decision is only correct once something else makes it. The core has a
+`CurveController` with up/down thresholds, a hysteresis band, a minimum dwell
+time and validation; what it did not have was the application's own configured
+table.
+
+**Decision 1 — the table is configuration, and it is mapped, not moved.**
+
+`core::curveFromLegacyRows()` is a pure function from `(temperature, fan)` rows
+to a `CurveConfig`. It is called from `CoreInit` and after every profile switch.
+Three consequences worth naming:
+
+- A row with a negative temperature ends the list. The legacy arrays are fixed
+  32-entry arrays, zeroed beyond the table; reading past the marker would read
+  `(0 degrees, level 0)` rows as data and either refuse the table as unordered or
+  accept a rule that turns the fan off below freezing.
+- `0x80` maps to `FanCommand::biosAutomatic()`, which is what the legacy code
+  meant by it, and the core requires it to be terminal (`bios_not_terminal`
+  otherwise). The legacy code could be configured with rows after it.
+- A command outside `0-7` that is not `0x80` is refused with the row and the
+  value named. `0x40` is a legacy special gated behind `Lev64Norm`, and nobody
+  here has established what it does to the EC. Mapping it to the nearest level
+  would be a guess about a register value, and the fan is not a place to guess.
+
+The mapping is stricter than the legacy scan in two ways, both deliberate: a
+table that rises in temperature while falling in fan is refused
+(`descending_command`) rather than applied, and a table that does not rise
+strictly is refused (`unordered_temperature`). The legacy scan took the last
+matching row, so it tolerated both.
+
+**Decision 2 — the curve does not enable anything.**
+
+The curve is a candidate configuration, exactly like the table it came from. The
+controller still refuses to issue a command until every Phase 0 verdict holds,
+and a test asserts that: with an empty `CapabilityReport`, the mapped legacy
+table produces no command and no register write. Mapping the table changes *how*
+the level is chosen, never *whether* it may be.
+
+**Decision 3 — a profile switch re-installs the curve.**
+
+The application selects a smart profile by copying `SmartLevels1` or
+`SmartLevels2` over `SmartLevels`, in six separate places. Once the level comes
+from the core, those copies have to reach the core or the selected profile would
+quietly stop being the one in force — a behavioural regression introduced by the
+refactor itself, and the kind that is invisible in a diff.
+
+`Controller::setCurve()`/`AppBridge::setCurve()` install a configuration verbatim,
+including an invalid one: `update` then refuses to control (`invalid_curve`) rather
+than continuing to run thresholds nobody selected. The alternative — keep the old
+curve when the new one fails validation — was rejected because the fan would then
+follow a profile the user had replaced.
+
+`setCurve` changes thresholds only. Capabilities, the safety state and the manual
+override are untouched, and a test asserts that a configuration change cannot turn
+an unverified machine into a controlled one.
+
+**Alternatives considered.**
+
+- *Recreate the whole bridge on a profile switch* — rejected: it resets the
+  controller's state, which on a verified machine would drop a manual override
+  and restart the consecutive-samples gate. Replacing the curve changes exactly
+  what changed.
+- *Precompute the level in the mapping and pass it to `SetFan(Smart, level)`* —
+  rejected: that is the legacy design with a different owner. The level belongs to
+  the controller, which is the only component that can see the capabilities, the
+  readback result and the dwell time.
+- *Keep the legacy scan as a fallback when the curve is invalid* — rejected. A
+  fallback decision path is a second decision path.
+- *Invent a mapping for `0x40` from the name `Lev64Norm`* — rejected. The name is
+  not evidence.
+
+**Safety impact.** Downward in what the software can do to the machine. Control
+requires the same Phase 0 verdicts; the new code adds validation the legacy scan
+did not have; `SmartControl` no longer computes a level at all, so a table can no
+longer be applied by a scan whose rules differ from the ones the tests exercise.
+Nothing here loads a driver or weakens a Windows security setting.
+
+**Testing and evidence.** `tests/legacy_policy_tests.cpp` 27 → 38 tests: the
+mapping, the end marker, the missing end marker, the empty table, the unknown
+special, the unordered table, the non-terminal BIOS row, and two integration
+tests that drive a real `Controller` from a mapped table — one asserting the
+levels it issues, one asserting that an unverified machine still gets no command.
+`tests/app_bridge_tests.cpp` 31 → 35: replacing the curve changes the issued
+level, replacing it does not change what is allowed, an invalid curve stops
+control rather than reverting, and a profile swap changes the level end to end.
+`scripts/check_legacy_ec.py` gains the rule that fails the build when a smart-table
+row is compared against `MaxTemp` — the deleted decision — with six new self-test
+cases, and `scripts/check_core_bootstrap.py` gains the rule that every profile
+copy is followed by `ApplySmartLevelsToCore()`, with two new self-test cases.
+
+**Consequences.** The legacy decision procedure is gone, and both its return and
+the un-applied profile switch are build failures. The application still reads its
+display values through the legacy `ReadEcStatus` on the worker thread; that is the
+read path, not the decision path, and it is recorded under T3-02 and T3-06 rather
+than quietly claimed as done here. `HandleData` still runs on the timer, and it
+still calls `SmartControl` — which now makes one core request instead of computing
+a level.
+
+**Revisit conditions.** When Phase 0 produces a hardware report and control is
+enabled for a machine, the curve's thresholds are the ones that will actually move
+its fan. At that point the mapping's use of `SmartLevels` as the source and its
+refusal of the legacy specials have to be re-examined against the measured
+register map, and the dwell time (today 0, because the cycle timer already paces
+evaluation) has to be justified by something other than a timer.

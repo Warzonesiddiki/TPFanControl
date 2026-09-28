@@ -3,6 +3,7 @@
 #include "app_bridge.h"
 #include "controller.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -123,6 +124,135 @@ struct LegacyCapabilityInputs {
 // to be true is much harder to enable by accident than one that needs a
 // boolean the UI set.
 CapabilityReport makeCapabilities(const LegacyCapabilityInputs& in);
+
+// ---------------------------------------------------------------------------
+// The startup assessment (T5-04).
+//
+// What the application should do when it starts, expressed as a decision rather
+// than as a sequence of ifs in Win32 code that nothing here can execute.
+//
+// The requirement is in DRIVER_BACKENDS.md section 5: with no approved backend,
+// monitor temperatures if possible, issue no manual EC writes, leave the fan to
+// the BIOS, and explain the missing dependency. "If possible" is doing real work
+// in that sentence, because on this machine the temperature sources are EC
+// registers: with no backend there is nothing to read, and saying "monitoring"
+// would promise readings that cannot arrive.
+//
+// So the assessment distinguishes the two monitor-only situations that the
+// legacy code collapsed into one:
+//
+//   * no backend          - nothing can be read and nothing may be written. The
+//                           window can show nothing, and the only honest thing
+//                           to show is why, plus the fact that the fan is on
+//                           firmware control.
+//   * backend, unverified - readings work and are shown; control is not
+//                           approved (Phase 0), so the fan is still the
+//                           firmware's.
+//
+// It never decides eligibility by itself. "May this machine be controlled" is
+// CapabilityReport::controlEligible(), which the controller also applies; a
+// second answer here would be a second rule, and the two would diverge. The
+// tests assert the two agree for every combination of inputs.
+// ---------------------------------------------------------------------------
+enum class StartupMode {
+    NoBackend,        // monitor-only, and not even readings are available
+    MonitorOnly,      // readings available, control not approved
+    ControlEligible,  // every Phase 0 verdict holds and control is approved
+};
+
+const char* toText(StartupMode mode) noexcept;
+
+struct StartupAssessment {
+    StartupMode mode = StartupMode::NoBackend;
+
+    // Whether this mode is monitor-only in the safety sense: no register may be
+    // written. True for NoBackend and MonitorOnly, and the application must not
+    // treat either as a fault - the machine is being used exactly as intended.
+    bool monitorOnly = true;
+
+    // Whether anything can be displayed. False in NoBackend: there is no way to
+    // reach the EC, so a temperature pane would be a pane of lies.
+    bool readingsAvailable = false;
+
+    // The same answer the controller will give, taken from the capability
+    // report rather than recomputed. False in every monitor-only mode.
+    bool mayControl = false;
+
+    // One line for the status field. Never empty: a blank status line reads as
+    // healthy, which is the failure mode the UI text functions exist to prevent.
+    std::string statusLine;
+
+    // The longer explanation, naming the missing dependency or the unverified
+    // condition and saying who has the fan. Never empty.
+    std::string explanation;
+};
+
+// Pure: no I/O, no globals, so it can be tested exhaustively.
+StartupAssessment assessStartup(const LegacyCapabilityInputs& in);
+
+// ---------------------------------------------------------------------------
+// The legacy temperature table, as a curve for the core (T3-04, T3-05)
+// ---------------------------------------------------------------------------
+//
+// The legacy application decided the fan level with a table: a list of
+// (temperature, fan) rows, scanned on every data cycle, whose result was
+// written to the EC. T3-05 wants that decision deleted or quarantined, and
+// deleting it is only correct once the core can make the same decision.
+//
+// The core can: `CurveController` is a curve with up/down thresholds, a dwell
+// time and validation. What was missing was the mapping from the application's
+// own configured table into a `CurveConfig`, and that mapping is the whole of
+// this section. It is a pure function over rows, so it is tested the same way
+// the rest of the policy is.
+//
+// The table is *configuration*, not evidence: it comes from the user's
+// TPFanControl.ini and it is exactly as unverified as the rest of the profile.
+// Mapping it does not enable anything - the controller still refuses control
+// until every Phase 0 verdict holds - it only means that when control does
+// become possible, the decision is made in one place instead of two.
+struct LegacyCurveRow {
+    int temperatureC = 0;   // Celsius. The parser converts a Fahrenheit table
+                            // before this ever sees it (misc.cpp), so this is
+                            // the same scale as a sensor reading.
+    int command = 0;        // 0x80 for "BIOS automatic", otherwise a fan level
+};
+
+struct LegacyCurveMapping {
+    CurveConfig config;
+
+    // validateCurve(config), plus this mapping's own errors. A mapping that is
+    // not valid must not be installed: the controller refuses control outright
+    // when its curve is invalid, which is the safe direction.
+    ValidationResult validation;
+
+    int rowsUsed = 0;         // rows before the end marker
+    bool hadEndMarker = false;// whether a negative temperature was found
+};
+
+// Builds the curve from consecutive rows. Iteration stops at the first row with
+// a negative temperature: the legacy table is terminated by `-1`, and reading
+// past it would read the zero-initialised tail of a fixed 32-entry array as
+// real data (row 0 of that tail is a level-0 threshold at 0 degrees).
+//
+// Rules, each of which the legacy code did not have:
+//
+//   - a row with command 0x80 becomes FanCommand::biosAutomatic() and must be
+//     terminal, because the core's curve requires it to be (``bios_not_terminal``
+//     otherwise). This matches what the legacy code meant by 0x80.
+//   - a row with a command outside 0-7 that is not 0x80 is refused with
+//     ``unsupported_legacy_level``, naming the row and the value. The legacy
+//     code had specials - 0x40, gated behind a config flag - whose meaning this
+//     project has not established, and inventing a mapping for them would be
+//     guessing with the fan.
+//   - up and down thresholds are the same value, because that is what the
+//     legacy table has: one temperature per row, used for both directions. The
+//     core's hysteresis is then explicit rather than implicit in the scan
+//     order.
+//   - the table must be strictly increasing in temperature and non-decreasing
+//     in fan level. The legacy scan could be handed a table that rises in
+//     temperature while falling in fan and would apply it; the core refuses it
+//     (``unordered_temperature``, ``descending_command``).
+LegacyCurveMapping curveFromLegacyRows(const LegacyCurveRow* rows, std::size_t count);
 
 // Translates an intent into a controller input. Pure: it performs no I/O and
 // consults no global state, so the decision can be tested exhaustively.

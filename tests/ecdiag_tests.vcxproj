@@ -1,10 +1,16 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <!-- T1-11: Windows test target for the portable core.
-       Builds exactly the same sources as tests/run_core_tests.sh, so the two
-       paths cannot drift. The test binary is a standalone console executable on
-       the dynamic CRT, so it shares no CRT with the application project and
-       needs no driver, no hardware, and no administrator rights. -->
+  <!-- T5-09: the read-only diagnostic.
+       Builds the same portable sources the Linux runner builds for this suite,
+       so the two paths cannot drift. The test binary is a standalone console
+       executable on the dynamic CRT: no driver, no hardware, no administrator
+       rights.
+
+       The suite drives a full run through a real EcBus over the fake EC and
+       asserts, from the bus's own write trace and the fake's committed-write
+       log, that no register was written. It needs ec_protocol.cpp for that bus
+       and ec_access.cpp for the configuration the bus validates and for the
+       EcBusReader seam. -->
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
       <Configuration>Debug</Configuration>
@@ -24,8 +30,8 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>9B4E7D05-1C68-4A32-8F19-D3E60B2A5C74</ProjectGuid>
-    <RootNamespace>legacy_policy_tests</RootNamespace>
+    <ProjectGuid>{543D9F80-27B2-4E26-A3AD-8EDD01303F93}</ProjectGuid>
+    <RootNamespace>ecdiag_tests</RootNamespace>
     <Keyword>Win32Proj</Keyword>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -99,7 +105,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <OutputFile>$(OutDir)legacy_policy_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)ecdiag_tests.exe</OutputFile>
       <TargetMachine>MachineX86</TargetMachine>
     </Link>
   </ItemDefinitionGroup>
@@ -117,7 +123,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <OutputFile>$(OutDir)legacy_policy_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)ecdiag_tests.exe</OutputFile>
       <TargetMachine>MachineX86</TargetMachine>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
@@ -139,7 +145,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <OutputFile>$(OutDir)legacy_policy_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)ecdiag_tests.exe</OutputFile>
       <TargetMachine>MachineX64</TargetMachine>
     </Link>
   </ItemDefinitionGroup>
@@ -157,37 +163,29 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <OutputFile>$(OutDir)legacy_policy_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)ecdiag_tests.exe</OutputFile>
       <TargetMachine>MachineX64</TargetMachine>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="legacy_policy_tests.cpp" />
+    <ClCompile Include="ecdiag_tests.cpp" />
     <ClCompile Include="fake_ec.cpp" />
     <ClCompile Include="..\fancontrol\core\core_types.cpp" />
-    <ClCompile Include="..\fancontrol\core\sensor_validation.cpp" />
-    <ClCompile Include="..\fancontrol\core\fan_curve.cpp" />
-    <ClCompile Include="..\fancontrol\core\controller.cpp" />
-    <ClCompile Include="..\fancontrol\core\app_bridge.cpp" />
-    <ClCompile Include="..\fancontrol\core\legacy_policy.cpp" />
-    <ClCompile Include="..\fancontrol\core\ec_access.cpp" />
     <ClCompile Include="..\fancontrol\core\io_backend.cpp" />
+    <ClCompile Include="..\fancontrol\core\ec_access.cpp" />
     <ClCompile Include="..\fancontrol\core\ec_protocol.cpp" />
+    <ClCompile Include="..\fancontrol\core\ecdiag.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="fake_ec.h" />
     <ClInclude Include="test_check.h" />
     <ClInclude Include="..\fancontrol\core\core_types.h" />
-    <ClInclude Include="..\fancontrol\core\sensor_validation.h" />
-    <ClInclude Include="..\fancontrol\core\fan_curve.h" />
-    <ClInclude Include="..\fancontrol\core\controller.h" />
-    <ClInclude Include="..\fancontrol\core\app_bridge.h" />
-    <ClInclude Include="..\fancontrol\core\legacy_policy.h" />
-    <ClInclude Include="..\fancontrol\core\ec_access.h" />
     <ClInclude Include="..\fancontrol\core\io_backend.h" />
+    <ClInclude Include="..\fancontrol\core\ec_access.h" />
     <ClInclude Include="..\fancontrol\core\ec_protocol.h" />
+    <ClInclude Include="..\fancontrol\core\ecdiag.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="run_core_tests.sh" />

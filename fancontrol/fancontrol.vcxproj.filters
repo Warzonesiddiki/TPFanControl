@@ -36,6 +36,12 @@
     <ClCompile Include="core\io_backend.cpp">
       <Filter>Core</Filter>
     </ClCompile>
+    <ClCompile Include="core\tvicport_backend.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="tvicport_dll.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="approot.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -79,6 +85,12 @@
     </ClInclude>
     <ClInclude Include="core\io_backend.h">
       <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\tvicport_backend.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="tvicport_dll.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="approot.h">
       <Filter>Header Files</Filter>

@@ -39,6 +39,11 @@ AppBridge::AppBridge(IIoBackend& backend, IClock& clock, BridgeConfig config)
     }
 }
 
+ValidationResult AppBridge::setCurve(const CurveConfig& config)
+{
+    return controller_.setCurve(config);
+}
+
 const EcBus& AppBridge::bus() const noexcept
 {
     return bus_;

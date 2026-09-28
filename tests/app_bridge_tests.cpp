@@ -11,6 +11,7 @@
 #include "test_check.h"
 
 #include "../fancontrol/core/app_bridge.h"
+#include "../fancontrol/core/legacy_policy.h"
 
 #include "fake_ec.h"
 
@@ -946,6 +947,150 @@ void testUiTextCannotChangeAState()
     CHECK(a.safetyState == core::SafetyState::Controlled);
 }
 
+// ---------------------------------------------------------------------------
+// T3-04: the curve can be replaced at run time
+// ---------------------------------------------------------------------------
+//
+// The legacy application let the user switch between two configured smart
+// profiles, and the switching was a table copy. Moving the decision into the
+// core makes the core's curve the thing in force, so a profile switch has to
+// reach it - or the selected profile would silently stop being applied, which
+// would be a behavioural regression introduced by the refactor itself.
+//
+// Every test here drives the real cycle (read, makeInput, update) against the
+// fake machine, so what is asserted is what the bridge would issue.
+
+// The fake machine sitting at 62 degrees, which is inside the second band of
+// the test curve.
+void loadWarmMachine(FakeEcBackend& backend)
+{
+    loadHealthyMachine(backend);
+    for (int i = 0; i < core::kTemp0Count; ++i) {
+        backend.setRegister(static_cast<std::uint8_t>(core::kRegisterTemp0 + i), 62);
+    }
+}
+
+ControllerOutput runCycle(
+    AppBridge& bridge,
+    std::uint64_t nowMs,
+    const core::CapabilityReport& capabilities)
+{
+    ControllerInput request = eligibleRequest();
+    request.capabilities = capabilities;
+    return bridge.cycle(nowMs, request);
+}
+
+void testTheCurveCanBeReplaced()
+{
+    noteTest();
+    const core::EcBusConfig busConfig;
+    FakeEcBackend backend(busConfig);
+    loadWarmMachine(backend);
+    FakeClock clock;
+    AppBridge bridge(backend, clock, bridgeConfig());
+
+    // The original curve asks for level 3 at 62 degrees.
+    const ControllerOutput before =
+        runCycle(bridge, 1000, eligibleCapabilities());
+    CHECK(before.commandMayBeIssued);
+    CHECK(before.command == core::FanCommand::levelCommand(3));
+
+    // A hotter profile: 6 in the same band.
+    core::CurveConfig hotter = eligibleCurve();
+    hotter.points[1].command = core::FanCommand::levelCommand(6);
+    CHECK(bridge.setCurve(hotter).valid);
+
+    const ControllerOutput after =
+        runCycle(bridge, 2000, eligibleCapabilities());
+    CHECK(after.commandMayBeIssued);
+    CHECK(after.command == core::FanCommand::levelCommand(6));
+}
+
+void testReplacingTheCurveDoesNotChangeWhatIsAllowed()
+{
+    noteTest();
+    // The dangerous shape of a setter like this is one that enables something.
+    // It must not: capabilities, the safety state and the manual override are
+    // untouched, so a configuration change cannot turn an unverified machine
+    // into a controlled one.
+    const core::EcBusConfig busConfig;
+    FakeEcBackend backend(busConfig);
+    loadWarmMachine(backend);
+    FakeClock clock;
+    AppBridge bridge(backend, clock, bridgeConfig());
+
+    // A curve that would ask for a real level, installed on a machine whose
+    // capabilities are not verified: control is still refused.
+    CHECK(bridge.setCurve(eligibleCurve()).valid);
+
+    const ControllerOutput output =
+        runCycle(bridge, 1000, core::CapabilityReport{});
+    CHECK(!output.commandMayBeIssued);
+    // The bus write trace holds every byte sent, including the command and
+    // address bytes a *read* has to send (ADR-020), so it is not the evidence
+    // here: the fake's committed-write log records only complete write
+    // transactions, and it is empty.
+    CHECK(backend.writtenRegisters().empty());
+}
+
+void testAnInvalidCurveStopsControlRatherThanReverting()
+{
+    noteTest();
+    // A user edits their profile and gets it wrong. The controller must not
+    // carry on running the curve that was replaced just because it was the last
+    // one that validated: the thresholds in force would then be ones nobody
+    // selected. It stops, and says which row was wrong.
+    const core::EcBusConfig busConfig;
+    FakeEcBackend backend(busConfig);
+    loadWarmMachine(backend);
+    FakeClock clock;
+    AppBridge bridge(backend, clock, bridgeConfig());
+
+    core::CurveConfig broken;   // no points at all
+    const core::ValidationResult validation = bridge.setCurve(broken);
+    CHECK(!validation.valid);
+
+    bool named = false;
+    for (const core::ValidationError& error : validation.errors) {
+        if (error.code == "empty_curve") {
+            named = true;
+        }
+    }
+    CHECK(named);
+
+    const ControllerOutput output =
+        runCycle(bridge, 1000, eligibleCapabilities());
+    CHECK(!output.commandMayBeIssued);
+    CHECK(output.reasonCode == "invalid_curve");
+    CHECK(backend.writtenRegisters().empty());
+}
+
+void testSwappingProfilesChangesTheLevelThroughTheBridge()
+{
+    noteTest();
+    // End to end for the profile switch: two tables, the same warm machine, and
+    // the issued command follows the table that is in force. This is what the
+    // six copy-and-apply sites in the application rely on.
+    const core::EcBusConfig busConfig;
+    FakeEcBackend backend(busConfig);
+    loadWarmMachine(backend);
+    FakeClock clock;
+    AppBridge bridge(backend, clock, bridgeConfig());
+
+    const core::LegacyCurveRow quiet[] = {{50, 0}, {60, 2}, {70, 0x80}};
+    const core::LegacyCurveRow loud[]  = {{50, 0}, {60, 5}, {70, 0x80}};
+
+    CHECK(bridge.setCurve(core::curveFromLegacyRows(quiet, 3).config).valid);
+    const ControllerOutput quietOutput =
+        runCycle(bridge, 1000, eligibleCapabilities());
+    CHECK(quietOutput.command == core::FanCommand::levelCommand(2));
+
+    CHECK(bridge.setCurve(core::curveFromLegacyRows(loud, 3).config).valid);
+    const ControllerOutput loudOutput =
+        runCycle(bridge, 2000, eligibleCapabilities());
+    CHECK(loudOutput.command == core::FanCommand::levelCommand(5));
+}
+
 void runAll()
 {
     // T3-01: the register map
@@ -1002,6 +1147,10 @@ void runAll()
     testEveryStateHasText();
     testDescribeIsNeverEmptyAndCarriesTheReason();
     testUiTextCannotChangeAState();
+    testTheCurveCanBeReplaced();
+    testReplacingTheCurveDoesNotChangeWhatIsAllowed();
+    testAnInvalidCurveStopsControlRatherThanReverting();
+    testSwappingProfilesChangesTheLevelThroughTheBridge();
 }
 
 } // namespace appbridge

@@ -16,6 +16,10 @@ The command-line surface is intended for support, automation, and testing. It mu
 
 The current portable core implements validation primitives only. These commands are an integration target and must not be advertised as available until wired into the Windows application.
 
+The read-only half of this contract also exists today as a separate portable tool,
+`ecdiag`, which is not part of `TPFanControl.exe` and has no control path at all.
+Its modes, report format and exit codes are documented in [ECDIAG.md](ECDIAG.md).
+
 ## 2. Output contract
 
 Human-readable output is allowed, but every command should also support a stable machine-readable form in a later version:

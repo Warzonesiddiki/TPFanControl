@@ -3,7 +3,7 @@
 **Project:** TPFanControl
 **Target:** ThinkPad T14 Gen 1 Intel; Windows version and build not yet supplied
 **Documentation status:** Feature plan expanded; portable core foundation started; hardware verification is still required
-**Last reviewed:** 2026-09-27
+**Last reviewed:** 2026-09-28
 
 ## Purpose
 
@@ -43,11 +43,13 @@ The exact machine type, CPU, BIOS revision, graphics configuration, EC port mapp
 | [CONTROL_ALGORITHM.md](CONTROL_ALGORITHM.md) | Curves, hysteresis, dwell, ramping, and manual control |
 | [OBSERVABILITY.md](OBSERVABILITY.md) | Status, telemetry, logs, graphs, fan health, and diagnostics |
 | [CLI_DIAGNOSTICS.md](CLI_DIAGNOSTICS.md) | Read-only command-line and diagnostic contracts |
+| [ECDIAG.md](ECDIAG.md) | The read-only EC diagnostic tool: modes, report format, and its read-only guarantee |
 | [USER_GUIDE.md](USER_GUIDE.md) | Intended user experience and recovery |
 | [COMPATIBILITY.md](COMPATIBILITY.md) | Capability states and support matrix |
 | [HARDWARE_VERIFICATION.md](HARDWARE_VERIFICATION.md) | Laptop identification and Phase 0 evidence |
 | [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) | Candidate EC addresses and verification status |
 | [DRIVER_BACKENDS.md](DRIVER_BACKENDS.md) | TVicPort, PawnIO, capability checks, and dependency policy |
+| [DEPENDENCIES.md](DEPENDENCIES.md) | The dependency record: sources, licences, hashes, and what is not established |
 | [SAFETY.md](SAFETY.md) | Safety state machine, failsafes, and limits |
 | [PROFILES.md](PROFILES.md) | INI/profile schema and T14 curve policy |
 | [BUILD.md](BUILD.md) | Reproducible Windows builds and output layout |

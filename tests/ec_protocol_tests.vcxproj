@@ -99,7 +99,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <OutputFile>$(OutDir)core_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)ec_protocol_tests.exe</OutputFile>
       <TargetMachine>MachineX86</TargetMachine>
     </Link>
   </ItemDefinitionGroup>
@@ -117,7 +117,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <OutputFile>$(OutDir)core_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)ec_protocol_tests.exe</OutputFile>
       <TargetMachine>MachineX86</TargetMachine>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
@@ -139,7 +139,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <OutputFile>$(OutDir)core_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)ec_protocol_tests.exe</OutputFile>
       <TargetMachine>MachineX64</TargetMachine>
     </Link>
   </ItemDefinitionGroup>
@@ -157,7 +157,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <OutputFile>$(OutDir)core_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)ec_protocol_tests.exe</OutputFile>
       <TargetMachine>MachineX64</TargetMachine>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
@@ -169,6 +169,7 @@
     <ClCompile Include="..\fancontrol\core\core_types.cpp" />
     <ClCompile Include="..\fancontrol\core\io_backend.cpp" />
     <ClCompile Include="..\fancontrol\core\ec_protocol.cpp" />
+    <ClCompile Include="..\fancontrol\core\ec_access.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="fake_ec.h" />
@@ -176,6 +177,7 @@
     <ClInclude Include="..\fancontrol\core\core_types.h" />
     <ClInclude Include="..\fancontrol\core\io_backend.h" />
     <ClInclude Include="..\fancontrol\core\ec_protocol.h" />
+    <ClInclude Include="..\fancontrol\core\ec_access.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="run_core_tests.sh" />

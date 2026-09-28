@@ -24,8 +24,8 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>9B4E7D05-1C68-4A32-8F19-D3E60B2A5C74</ProjectGuid>
-    <RootNamespace>legacy_policy_tests</RootNamespace>
+    <ProjectGuid>4C7A2E18-6B93-4F52-9D08-31E5A7C42B60</ProjectGuid>
+    <RootNamespace>tvicport_backend_tests</RootNamespace>
     <Keyword>Win32Proj</Keyword>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -99,7 +99,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <OutputFile>$(OutDir)legacy_policy_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)tvicport_backend_tests.exe</OutputFile>
       <TargetMachine>MachineX86</TargetMachine>
     </Link>
   </ItemDefinitionGroup>
@@ -117,7 +117,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <OutputFile>$(OutDir)legacy_policy_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)tvicport_backend_tests.exe</OutputFile>
       <TargetMachine>MachineX86</TargetMachine>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
@@ -139,7 +139,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <OutputFile>$(OutDir)legacy_policy_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)tvicport_backend_tests.exe</OutputFile>
       <TargetMachine>MachineX64</TargetMachine>
     </Link>
   </ItemDefinitionGroup>
@@ -157,37 +157,23 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <OutputFile>$(OutDir)legacy_policy_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)tvicport_backend_tests.exe</OutputFile>
       <TargetMachine>MachineX64</TargetMachine>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="legacy_policy_tests.cpp" />
-    <ClCompile Include="fake_ec.cpp" />
-    <ClCompile Include="..\fancontrol\core\core_types.cpp" />
-    <ClCompile Include="..\fancontrol\core\sensor_validation.cpp" />
-    <ClCompile Include="..\fancontrol\core\fan_curve.cpp" />
-    <ClCompile Include="..\fancontrol\core\controller.cpp" />
-    <ClCompile Include="..\fancontrol\core\app_bridge.cpp" />
-    <ClCompile Include="..\fancontrol\core\legacy_policy.cpp" />
-    <ClCompile Include="..\fancontrol\core\ec_access.cpp" />
+    <ClCompile Include="tvicport_backend_tests.cpp" />
     <ClCompile Include="..\fancontrol\core\io_backend.cpp" />
-    <ClCompile Include="..\fancontrol\core\ec_protocol.cpp" />
+    <ClCompile Include="..\fancontrol\core\legacy_backend.cpp" />
+    <ClCompile Include="..\fancontrol\core\tvicport_backend.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="fake_ec.h" />
     <ClInclude Include="test_check.h" />
-    <ClInclude Include="..\fancontrol\core\core_types.h" />
-    <ClInclude Include="..\fancontrol\core\sensor_validation.h" />
-    <ClInclude Include="..\fancontrol\core\fan_curve.h" />
-    <ClInclude Include="..\fancontrol\core\controller.h" />
-    <ClInclude Include="..\fancontrol\core\app_bridge.h" />
-    <ClInclude Include="..\fancontrol\core\legacy_policy.h" />
-    <ClInclude Include="..\fancontrol\core\ec_access.h" />
     <ClInclude Include="..\fancontrol\core\io_backend.h" />
-    <ClInclude Include="..\fancontrol\core\ec_protocol.h" />
+    <ClInclude Include="..\fancontrol\core\legacy_backend.h" />
+    <ClInclude Include="..\fancontrol\core\tvicport_backend.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="run_core_tests.sh" />

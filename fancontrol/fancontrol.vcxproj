@@ -367,11 +367,40 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <AdditionalOptions>/permissive- /EHsc /utf-8</AdditionalOptions>
     </ClCompile>
+    <ClCompile Include="core\ec_access.cpp">
+      <!-- T5: the bus configuration and the read-only seam. Split out of
+           ec_protocol.h so that a diagnostic can be handed the configuration
+           without the ability to name EcBus. Read-only by construction, and
+           checked: scripts/check_ecdiag_readonly.py fails the build if the
+           tool's include closure ever reaches a write. -->
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <AdditionalOptions>/permissive- /EHsc /utf-8</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="core\ec_protocol.cpp">
       <!-- T5: the EC transaction layer. Same /W4 /WX treatment as the rest
            of the core, for the same reason: this is the code that decides
            whether a register write is issued, so a warning here is a
            safety signal, not a style note. -->
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <AdditionalOptions>/permissive- /EHsc /utf-8</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="tvicport_dll.cpp">
+      <!-- T5-01: the one place that names the TVicPort DLL's entry points.
+           Its core unit (core\tvicport_backend.cpp) is /W4 /WX; this file
+           is legacy-side glue and follows the legacy warning policy, but it
+           contains no decision - it forwards five calls. -->
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level4</WarningLevel>
+      <AdditionalOptions>/permissive- /EHsc /utf-8</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="core\tvicport_backend.cpp">
+      <!-- T5-01: the TVicPort baseline adapter. /W4 /WX for the same reason
+           as the rest of the core: it decides whether a port call is made,
+           and it is the layer that could silently turn hard access on. -->
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>true</TreatWarningAsError>
@@ -397,6 +426,7 @@
     <ClInclude Include="TaskbarTextIcon.h" />
     <ClInclude Include="tools.h" />
     <ClInclude Include="TVicPort.h" />
+    <ClInclude Include="tvicport_dll.h" />
     <ClInclude Include="winstuff.h" />
     <ClInclude Include="_prec.h" />
     <ClInclude Include="core\core_types.h" />
@@ -404,8 +434,10 @@
     <ClInclude Include="core\fan_curve.h" />
     <ClInclude Include="core\controller.h" />
     <ClInclude Include="core\io_backend.h" />
+    <ClInclude Include="core\tvicport_backend.h" />
     <ClInclude Include="core\legacy_policy.h" />
     <ClInclude Include="core\legacy_backend.h" />
+    <ClInclude Include="core\ec_access.h" />
     <ClInclude Include="core\ec_protocol.h" />
     <ClInclude Include="core\app_bridge.h" />
   </ItemGroup>

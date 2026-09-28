@@ -57,34 +57,65 @@ Prove that every failure path:
 ## 3. Portable-core and feature tests
 
 The hardware-independent core lives under `fancontrol/core/` and is exercised by
-**five** suites, all hardware-free and all buildable without Windows headers or a
-driver:
+**seven** suites, all hardware-free and all buildable without Windows headers or
+a driver:
 
 | Suite | Source | Tests | Covers |
 |---|---|---:|---|
 | `core_tests` | `tests/core_tests.cpp` | 11 | curves, sensor validation, stuck/stale sources, controller gates, safety states |
 | `ec_protocol_tests` | `tests/ec_protocol_tests.cpp` | 42 | `EcBus` transactions, wire sequence, IBF/OBF waits, timeouts, the `0x31` refusal |
-| `app_bridge_tests` | `tests/app_bridge_tests.cpp` | 31 | the seam: a command reaches the EC only if the core authorised it, readback verification, fail-safe on a read failure |
-| `legacy_policy_tests` | `tests/legacy_policy_tests.cpp` | 20 | the legacy UI's intent translated to a core request; the refusal to address an individual fan; the monitor-only guard; the final-manual refusal |
+| `app_bridge_tests` | `tests/app_bridge_tests.cpp` | 35 | the seam: a command reaches the EC only if the core authorised it, readback verification, fail-safe on a read failure, and replacing the curve at run time (the profile switch) |
+| `ecdiag_tests` | `tests/ecdiag_tests.cpp` | 29 | the read-only diagnostic: a full run through a real `EcBus` writes no register, the integrity checks catch a reader that does, and the JSON report is accepted by a strict parser |
+| `legacy_policy_tests` | `tests/legacy_policy_tests.cpp` | 38 | the legacy UI's intent translated to a core request; the refusal to address an individual fan; the monitor-only guard; the final-manual refusal; and the startup assessment — the three modes, the 128-machine exhaustive agreement with `CapabilityReport::controlEligible()`, and the rule that the status text is never blank |
 | `legacy_backend_tests` | `tests/legacy_backend_tests.cpp` | 16 | the port backend: that port numbers arrive unchanged, that `EcBus` + backend is exactly one transaction, and that register writes are denied by default |
+| `tvicport_backend_tests` | `tests/tvicport_backend_tests.cpp` | 19 | the TVicPort baseline adapter's lifecycle, against a fake DLL: what it opens and closes, and the hard-access switch it does not flip unless asked |
 
 `core_tests` reports no count: it predates the convention and was not renumbered.
-The other four print their own count and fail if it is wrong, so a suite that
+The other six print their own count and fail if it is wrong, so a suite that
 silently ran half its cases fails rather than passing quietly.
 
-All five are built and run by `tests/run_core_tests.sh`, the single entry point
-used by CI on Linux, macOS and Windows. On Windows they also build as
-`tests/*.vcxproj` in all four configurations, under `/W4 /WX /permissive- /EHsc`.
+All seven are built and run by `tests/run_core_tests.sh`, the single entry point
+used by CI on Linux, macOS and Windows. The same script builds the `ecdiag` tool
+itself and exercises its modes and exit codes. On Windows the suites also build as
+`tests/*.vcxproj`, and the tool as `tools/ecdiag/ecdiag.vcxproj`, in all four
+configurations under `/W4 /WX /permissive- /EHsc`.
+
+The `ecdiag` suite is the one that proves a negative: that a complete diagnostic
+run writes no register. It does that by reading the bus's own write trace and the
+fake's committed-write log rather than by trusting the tool's intent, and the
+structural half of the same guarantee — the tool cannot name a write at all — is
+checked by `scripts/check_ecdiag_readonly.py`. See [ECDIAG.md](ECDIAG.md).
+
+`tvicport_backend_tests` is the suite that runs against a fake *DLL* rather than
+a fake EC: it counts the calls to the seven TVicPort entry points, so "the
+adapter opened the driver once", "it did not call `SetHardAccess`", and "it made
+no port call after the driver was closed under it" are assertions rather than
+claims. It proves nothing about a real driver — see ADR-026 for what is
+deliberately not turned on, and T4-06 for where that is measured.
 
 ### 3.0 What the bridge and policy suites deliberately do not prove
 
 Three things, stated because each is easy to assume has been covered:
 
 - **They do not prove the application builds.** `SetFan` is Win32 dialog code.
-  The core call sequence it makes is typechecked by a translation unit that
-  mirrors it statement for statement, which catches an API mismatch, but
-  sprintf_s overload resolution, `MUTEXSEM` semantics and Win32 header
-  interactions are only exercised by a real MSVC build.
+  What is checked is the API surface it uses: `tests/app_bridge_tests.cpp` reads
+  a machine, builds a `ControllerInput` with `AppBridge::makeInput`, calls
+  `Controller::update` and then `AppBridge::apply` — the same functions, types
+  and fields in the same order — so a renamed method or a changed signature
+  fails to compile in `tests/` even though it is `SetFan` that would break.
+  T5-04's startup inputs are checked the same way: `LegacyCapabilityInputs` is
+  constructed field by field in `tests/legacy_policy_tests.cpp` exactly as
+  `CoreInit` constructs it. That catches an API mismatch and nothing else —
+  `sprintf_s` overload resolution, `MUTEXSEM` semantics and Win32 header
+  interactions are only exercised by a real MSVC build, and T5-04's
+  `StartCore()` is a `FANCONTROL` member that no Test here can even link
+  against. `scripts/check_core_bootstrap.py`, in §3.1, is the static stand-in
+  for the part no test can reach.
+- **They do not prove the application chooses the level in production.** The
+  mapping from `SmartLevels` to the core's curve is tested, and so is the
+  controller's behaviour under it, but the call site (`CoreInit`, and the six
+  profile switches) is Win32 code that no test here executes. That is why
+  `scripts/check_core_bootstrap.py` states the wiring as a static property.
 - **They do not prove the fan moves.** Everything above `LegacyBackend` is
   exercised against a fake. The first real EC transaction is a Phase 0 event and
   must be read-only.
@@ -92,16 +123,29 @@ Three things, stated because each is easy to assume has been covered:
   be non-empty and to name the right thing, but that a dialog actually shows them
   is a manual test with a person looking at it.
 
-### 3.1 A guard for code that cannot be executed here
+### 3.1 Guards for code that cannot be executed here
 
 `SetFan` cannot run in this environment, so nothing in `tests/` can execute it.
-The regression guard for the defect in `EC_REGISTER_MAP.md` §10 is therefore
-static, and lives in `scripts/`:
+The same is true of the startup path: `approot.cpp` opens the port driver and
+starts the core, and there is no way to run either here. Both of the defects that
+matter most in this project are in code that no test in `tests/` can reach, so the
+regression guards for them are static and live in `scripts/`:
 
 | Script | Purpose |
 |---|---|
-| `check_legacy_ec.py` | fails the build on a write to the fan-selector register, or a fan-level write from outside the core, anywhere in the legacy sources |
+| `check_legacy_ec.py` | fails the build on a write to the fan-selector register, a fan-level write from outside the core, or a smart-table row compared against a temperature — the deleted legacy decision procedure — anywhere in the legacy sources |
 | `check_legacy_ec_selftest.py` | proves that guard still matches what it claims to, over 17 cases of which half must not match |
+| `check_core_bootstrap.py` | T5-04 and T3-04: fails the build unless the application actually starts the core — the seam is called from a file that is not the one defining it, it is declared after `public:`, `StartCore` calls `CoreInit`, `AppBridge` has exactly one construction site, and every smart-profile copy is followed by `ApplySmartLevelsToCore()` |
+| `check_core_bootstrap.py --selftest` | proves that guard still matches what it claims to, over 7 cases of which six must be caught |
+
+`check_core_bootstrap.py` exists because the defect it guards was invisible in
+every other way. `FANCONTROL::CoreInit()` had no caller, so the bridge was never
+built and every fan request answered "core not initialised" — and the call could
+not have been written, because `CoreInit` sat in the `protected:` section while
+`approot.cpp` is a free function. Each file reads correctly on its own, which is
+exactly the shape no test and no compiler diagnoses. The check states the
+cross-file property directly: the core is started, from the startup path, through
+a seam that path can reach.
 
 The second script exists because the first is only as good as its patterns. It
 has already found three real defects in the first: a level rule that matched

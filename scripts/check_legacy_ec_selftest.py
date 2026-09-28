@@ -34,6 +34,7 @@ def build_cases(rules):
     by_id = {rule_id: pattern for rule_id, pattern, _why in rules}
     selector = by_id["fan-selector-write"]
     level = by_id["fan-level-write-outside-core"]
+    curve = by_id["legacy-curve-decision"]
     def write(line):
         return "ok= this->WriteByteToEC(%s);" % line
 
@@ -65,6 +66,32 @@ def build_cases(rules):
          "an unrelated HDW write is not a fan write"),
 
         (write("0x2F, level"), level, True, "level, two hex digits"),
+
+        # The deleted legacy decision procedure, and the lines that legitimately
+        # read the same table. The negative half here is the whole point: the
+        # config parser, the Fahrenheit sniff, the dialog's table display and
+        # CoreInit's curve construction all name SmartLevels and must stay legal.
+        ("if (this->MaxTemp>=this->SmartLevels[i].temp && this->SmartLevels[i].fan>=fanctrl)",
+         curve, True, "the up-trigger scan"),
+        ("if (this->MaxTemp <= this->SmartLevels[i].temp && this->SmartLevels[i].fan < fanctrl) {",
+         curve, True, "the down-trigger scan"),
+        ("if (this->MaxTemp > SmartLevels[i].temp)", curve, True,
+         "any comparison, any spelling"),
+        ("newfanctrl= (this->MaxTemp>=this->SmartLevels[i].temp) ? this->SmartLevels[i].fan : newfanctrl;",
+         curve, True, "the same decision in one statement"),
+        ("// the old scan was: if (this->MaxTemp>=this->SmartLevels[i].temp) newfanctrl= this->SmartLevels[i].fan;",
+         curve, False,
+         "a comment about the old scan is not the old scan (comments are stripped first)"),
+        ("curveRows[curveRowCount].temperatureC= this->SmartLevels[i].temp;",
+         curve, False, "CoreInit maps the table into the curve"),
+        ('sscanf_s(buf+6, "%d %d", &this->SmartLevels[lcnt].temp, &this->SmartLevels[lcnt].fan);',
+         curve, False, "the config parser fills the table"),
+        ("if(this->SmartLevels[0].temp >= 80) Fahrenheit = TRUE;",
+         curve, False, "the parser's Fahrenheit sniff, before conversion"),
+        ('sprintf_s(buf+strlen(buf),sizeof(buf)-strlen(buf), "%s", this->SmartLevels[i].temp);',
+         curve, False, "the dialog and the log print the table"),
+        ("for (i= 0; i < 32 && this->SmartLevels[i].temp >= 0; i++) {",
+         curve, False, "the end-marker scan in CoreInit"),
     ]
 
 

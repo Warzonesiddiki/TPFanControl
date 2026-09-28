@@ -1,9 +1,13 @@
-﻿name: CI
+name: CI
 
 # Tasks covered:
 #   T1-08  portable core tests on Linux, macOS and Windows
-#           (all six suites: core_tests, ec_protocol_tests, app_bridge_tests,
-#            legacy_policy_tests and legacy_backend_tests)
+#           (all seven suites: core_tests, ec_protocol_tests, app_bridge_tests,
+#            ecdiag_tests, legacy_policy_tests, legacy_backend_tests and
+#            tvicport_backend_tests)
+#           plus the ecdiag tool itself, built and smoke-tested
+#   T5-11  the dependency record: hashes match, ten fields per dependency,
+#           every tracked binary artefact recorded
 #   T1-09  Release build with warnings-as-errors on the core
 #   T1-10  git diff --check and a link check
 #   T1-11  Windows test target
@@ -53,7 +57,8 @@ jobs:
           mkdir -p "$BUILD_DIR"
           CXX="${CXX:-g++}"
           for suite in core_tests ec_protocol_tests app_bridge_tests \
-                       legacy_policy_tests legacy_backend_tests; do
+                       ecdiag_tests legacy_policy_tests legacy_backend_tests \
+                       tvicport_backend_tests; do
             # core_tests uses the fake backend; the EC suites use the fake EC.
             # legacy_policy_tests supplies its own doubles inline and needs no
             # fake. legacy_backend_tests does need fake_ec.cpp - for FakeClock,
@@ -65,7 +70,7 @@ jobs:
             # have failed four minutes into a CI run.
             case "$suite" in
               core_tests)          FAKE=tests/fake_backend.cpp ;;
-              legacy_policy_tests) FAKE=/dev/null ;;
+              legacy_policy_tests | tvicport_backend_tests) FAKE=/dev/null ;;
               *)                   FAKE=tests/fake_ec.cpp ;;
             esac
             # ec_protocol_tests and app_bridge_tests use std::thread for the transaction
@@ -86,7 +91,8 @@ jobs:
           # still exits 0, so this is verified rather than assumed.
           # See tests/test_check.h.
           for suite in core_tests ec_protocol_tests app_bridge_tests \
-                       legacy_policy_tests legacy_backend_tests; do
+                       ecdiag_tests legacy_policy_tests legacy_backend_tests \
+                       tvicport_backend_tests; do
             # core_tests uses the fake backend; the EC suites use the fake EC.
             # legacy_policy_tests supplies its own doubles inline and needs no
             # fake. legacy_backend_tests does need fake_ec.cpp - for FakeClock,
@@ -98,7 +104,7 @@ jobs:
             # have failed four minutes into a CI run.
             case "$suite" in
               core_tests)          FAKE=tests/fake_backend.cpp ;;
-              legacy_policy_tests) FAKE=/dev/null ;;
+              legacy_policy_tests | tvicport_backend_tests) FAKE=/dev/null ;;
               *)                   FAKE=tests/fake_ec.cpp ;;
             esac
             "$CXX" -std=c++17 -O2 -DNDEBUG -Wall -Wextra -Werror -pedantic \
@@ -147,8 +153,10 @@ jobs:
           out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\core_tests.exe
           out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\ec_protocol_tests.exe
             out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\app_bridge_tests.exe
+            out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\ecdiag_tests.exe
             out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\legacy_policy_tests.exe
             out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\legacy_backend_tests.exe
+            out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\tvicport_backend_tests.exe
 
       - name: Upload build log
         if: always()
@@ -169,8 +177,10 @@ jobs:
       - name: Build Release test targets with warnings-as-errors
         run: >
           msbuild tests\core_tests.vcxproj tests\ec_protocol_tests.vcxproj
-                        tests\app_bridge_tests.vcxproj tests\legacy_policy_tests.vcxproj
+                        tests\app_bridge_tests.vcxproj tests\ecdiag_tests.vcxproj
+                        tests\legacy_policy_tests.vcxproj
                         tests\legacy_backend_tests.vcxproj
+                        tests\tvicport_backend_tests.vcxproj
           /m
           /p:Configuration=Release
           /p:Platform=x64
@@ -186,8 +196,10 @@ jobs:
           out\tests\x64\Release\core_tests.exe
           out\tests\x64\Release\ec_protocol_tests.exe
             out\tests\x64\Release\app_bridge_tests.exe
+            out\tests\x64\Release\ecdiag_tests.exe
             out\tests\x64\Release\legacy_policy_tests.exe
             out\tests\x64\Release\legacy_backend_tests.exe
+            out\tests\x64\Release\tvicport_backend_tests.exe
 
       - name: Confirm the core really was compiled with /W4 and /WX
         # Guards against the flag silently not being applied, which would make
@@ -196,7 +208,7 @@ jobs:
         shell: pwsh
         run: |
           $log = Get-Content build-core-wx.log -Raw
-          $coreUnits = @('core_types', 'sensor_validation', 'fan_curve', 'controller', 'io_backend', 'ec_protocol', 'app_bridge', 'legacy_policy', 'legacy_backend')
+          $coreUnits = @('core_types', 'sensor_validation', 'fan_curve', 'controller', 'io_backend', 'ec_access', 'ec_protocol', 'ecdiag', 'app_bridge', 'legacy_policy', 'legacy_backend', 'tvicport_backend')
           $fail = @()
           foreach ($u in $coreUnits) {
             $lines = $log -split "`r?`n" | Where-Object { $_ -match "$u\.cpp" -and $_ -match '\bcl\.exe\b|compiler' }
@@ -241,11 +253,34 @@ jobs:
 
       - name: Solution and project structure
         # Catches a Project( with no EndProject, a project file that does not
-        # exist, a vcxproj listing a source that is not on disk, and a project
-        # that is not mapped into all four configurations. Every one of those
-        # produces a build that is less than it appears to be, and none of them
-        # is visible without a machine that has MSBuild.
+        # exist, a vcxproj listing a source that is not on disk, a project that
+        # is not mapped into all four configurations, and a project whose
+        # OutputFile is not its own. Every one of those produces a build that is
+        # less than it appears to be, and none of them is visible without a
+        # machine that has MSBuild. The OutputFile rule is the one that would
+        # have caught five projects all linking core_tests.exe - a job that ran
+        # one suite and reported success for six.
         run: python3 scripts/check_projects.py
+
+      - name: Every project builds from its own source list
+        # T1-11/T5-09. A Visual Studio project states which sources a binary is
+        # made of, a second time and independently of the portable runner. When
+        # the two disagree the failure appears only on Windows, only at link
+        # time, and only in the job that was supposed to be the verification.
+        #
+        # This compiles each project's own <ClCompile> list with the system
+        # compiler and runs the result, so a missing source fails here instead
+        # of there. The first real run found four of five test projects unable
+        # to link (none of them listed ec_access.cpp, and one had never compiled
+        # the bus it exercises), a duplicate source item, and five projects all
+        # writing core_tests.exe - which is how the executables this workflow
+        # runs came not to exist.
+        #
+        # It is not a Windows build: see the script's own note on what it can
+        # and cannot show.
+        run: |
+          python3 scripts/check_project_sources.py --selftest
+          python3 scripts/check_project_sources.py
 
       - name: The legacy application writes no forbidden EC register
         # T3-11. The legacy SetFan() wrote 0x31, the fan-selector register, four
@@ -265,6 +300,26 @@ jobs:
           python3 scripts/check_legacy_ec_selftest.py
           python3 scripts/check_legacy_ec.py
 
+      - name: The application actually starts the portable core
+        # T5-04. The whole core existed for one task with no caller in the
+        # shipped application: CoreInit sat in the protected section of
+        # FANCONTROL while the startup path is a free function, so the call that
+        # was needed was impossible to write and CoreBridge was always null.
+        # Every fan request answered "core not initialised", which is safe and is
+        # not the integration the T3 work describes.
+        #
+        # No test in this repository can execute the startup path, and the
+        # compiler sees one file at a time, so the guard is static: the seam is
+        # called from the startup path, it is declared public, StartCore calls
+        # CoreInit, and AppBridge has exactly one construction site.
+        #
+        # The self-test runs first. A guard whose patterns have stopped matching
+        # reports a clean tree and a green job, and this repository has already
+        # been bitten by a "wired up" claim that was not true.
+        run: |
+          python3 scripts/check_core_bootstrap.py --selftest
+          python3 scripts/check_core_bootstrap.py
+
       - name: Shell scripts start with a clean shebang
         # A UTF-8 BOM is invisible in an editor and fatal to /bin/sh: the kernel
         # reads the first two bytes as '#!', fails, and the script is
@@ -281,6 +336,35 @@ jobs:
           done
           [ "$bad" -eq 0 ]
           echo "all shell scripts have a clean shebang"
+
+      - name: The ecdiag tool cannot reach anything that writes
+        # T5-09. ecdiag is read-only by construction: it is handed an interface
+        # with one read operation and no write member, which holds only while its
+        # include closure stays closed. One convenient include would put EcBus and
+        # writeRegister back within reach, and nothing else in the build would say
+        # so. This also refuses to pass if the runtime trace assertions in
+        # tests/ecdiag_tests.cpp have been deleted, because a structural guarantee
+        # whose runtime evidence is gone is a guarantee nobody is checking.
+        #
+        # The self-test runs first and proves the rules still match what they claim
+        # to, which is the failure mode that has actually bitten this repository.
+        run: |
+          python3 scripts/check_ecdiag_readonly.py --selftest
+          python3 scripts/check_ecdiag_readonly.py
+
+      - name: The dependency record describes the files that are here
+        # T5-11. The record pins the vendored import library by hash, carries the
+        # ten fields SECURITY.md section 3 requires for each dependency, and has
+        # to cover every tracked .lib/.dll/.sys/.exe/.msi/.cab/.zip. A checksum
+        # row that no longer matches the file - or a binary that never entered
+        # the record - is the failure mode this catches, and neither is visible
+        # by reading the document.
+        #
+        # The self-test runs first: the record's rules are exactly the kind that
+        # can stop matching while still reporting success.
+        run: |
+          python3 scripts/check_dependencies.py --selftest
+          python3 scripts/check_dependencies.py
 
       - name: Markdown link check
         run: python3 scripts/check_links.py
@@ -344,8 +428,10 @@ jobs:
       - name: Analyse the core
         run: >
           msbuild tests/core_tests.vcxproj tests/ec_protocol_tests.vcxproj
-                        tests/app_bridge_tests.vcxproj tests/legacy_policy_tests.vcxproj
+                        tests/app_bridge_tests.vcxproj tests/ecdiag_tests.vcxproj
+                        tests/legacy_policy_tests.vcxproj
                         tests/legacy_backend_tests.vcxproj
+                        tests/tvicport_backend_tests.vcxproj
           /p:Configuration=Release
           /p:Platform=x64
           /p:RunCodeAnalysis=true

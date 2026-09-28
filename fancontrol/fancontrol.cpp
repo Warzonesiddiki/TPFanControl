@@ -677,6 +677,8 @@ switch (msg) {
 									this->SmartLevels[i].temp = this->SmartLevels1[i].temp1; 
 									this->SmartLevels[i].fan = this->SmartLevels1[i].fan1;
 						}
+						// T3-04: the core's curve follows the profile the user just selected.
+						this->ApplySmartLevelsToCore();
 						::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
 				break;
 
@@ -691,6 +693,8 @@ switch (msg) {
 									this->SmartLevels[i].temp = this->SmartLevels2[i].temp2; 
 									this->SmartLevels[i].fan = this->SmartLevels2[i].fan2;
 						}
+						// T3-04: the core's curve follows the profile the user just selected.
+						this->ApplySmartLevelsToCore();
 						::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);	   
 				break;
 
@@ -733,6 +737,8 @@ switch (msg) {
 				this->SmartLevels[i].temp = this->SmartLevels2[i].temp2; 
 				this->SmartLevels[i].fan = this->SmartLevels2[i].fan2;
 			}
+			// T3-04: the core's curve follows the profile the user just selected.
+			this->ApplySmartLevelsToCore();
 			::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
 			break;
 		case 1: 
@@ -743,6 +749,8 @@ switch (msg) {
 				this->SmartLevels[i].temp = this->SmartLevels1[i].temp1; 
 				this->SmartLevels[i].fan = this->SmartLevels1[i].fan1;
 			}
+			// T3-04: the core's curve follows the profile the user just selected.
+			this->ApplySmartLevelsToCore();
 			::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
 			break;
 			}
@@ -1167,6 +1175,8 @@ switch (msg) {
 									this->SmartLevels[i].temp = this->SmartLevels1[i].temp1; 
 									this->SmartLevels[i].fan = this->SmartLevels1[i].fan1;
 						}
+						// T3-04: the core's curve follows the profile the user just selected.
+						this->ApplySmartLevelsToCore();
 						::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
 						break;
 
@@ -1181,6 +1191,8 @@ switch (msg) {
 									this->SmartLevels[i].temp = this->SmartLevels2[i].temp2; 
 									this->SmartLevels[i].fan = this->SmartLevels2[i].fan2;
 						}
+						// T3-04: the core's curve follows the profile the user just selected.
+						this->ApplySmartLevelsToCore();
 						::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);	   
 						break;
 

@@ -7,6 +7,11 @@ namespace core {
 
 bool CapabilityReport::controlEligible() const noexcept
 {
+    // First, because it is a decision rather than an outstanding obligation:
+    // a machine somebody has put in monitor-only mode is not "nearly eligible".
+    if (monitorOnlyForced) {
+        return false;
+    }
     return exactHardwareMatch &&
            profileVerified &&
            topologyVerified &&
@@ -14,8 +19,24 @@ bool CapabilityReport::controlEligible() const noexcept
            restoreAvailable;
 }
 
+ValidationResult Controller::setCurve(const CurveConfig& config)
+{
+    config_.curve = config;
+    curve_ = CurveController(config);
+
+    // A fresh curve starts uninitialised, so the next update selects an index
+    // from the temperature in front of it rather than carrying an index that
+    // belonged to the previous thresholds.
+    curve_.reset();
+
+    return curve_.validation();
+}
+
 std::string CapabilityReport::blockingReason() const
 {
+    if (monitorOnlyForced) {
+        return "monitor_only_forced";
+    }
     if (!exactHardwareMatch) {
         return "hardware_identity_unverified";
     }

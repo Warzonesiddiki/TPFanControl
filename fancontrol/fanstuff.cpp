@@ -20,6 +20,7 @@
 #include "fancontrol.h"
 #include "tools.h"
 #include "TVicPort.h"
+#include "tvicport_dll.h"
 
 // T3-11. The fan-selector register. It is named here because the register map
 // records it, and read-only code may still refer to it, but this build must
@@ -331,9 +332,7 @@ FANCONTROL::HandleData(void)
 int 
 FANCONTROL::SmartControl(void)
 {
-        int ok= 0, i,
-            newfanctrl= -1,
-            fanctrl= this->State.FanCtrl;
+		int ok= 0;
         char obuf[256]= "";
 
 			if (this->PreviousMode==1){sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "Change Mode from BIOS->");
@@ -343,39 +342,33 @@ FANCONTROL::SmartControl(void)
 				sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "Smart, recalculate fan speed");
 				this->Trace(obuf);}
 
-			newfanctrl= -1;
-
-			if ( (fanctrl > 7 && (fanctrl != 64 || !Lev64Norm)) || this->PreviousMode==3 || this->PreviousMode==1 ){newfanctrl = 0; fanctrl = 0; }
-
-        //	check for fan-up, end marker for smart levels array:
-		//	this->SmartLevels[lcnt].temp= -1;
-		//	this->SmartLevels[lcnt].fan= 0x80;
-
-			for (i= 0; this->SmartLevels[i].temp!=-1; i++) {
-				if (this->MaxTemp>=this->SmartLevels[i].temp && this->SmartLevels[i].fan>=fanctrl)
-				newfanctrl= this->SmartLevels[i].fan; 
-			}
-		
-		// not uptriggered check for downtrigger:
-
-			if (newfanctrl==-1) {	
-				for (i= 0; this->SmartLevels[i].temp!=-1; i++) {
-					if (this->MaxTemp <= this->SmartLevels[i].temp && this->SmartLevels[i].fan < fanctrl) {
-						newfanctrl= this->SmartLevels[i].fan; 
-						break;
-					}
-				}
-			}
-
-		// fan speed needs change?
-
-			if (newfanctrl!=-1 && newfanctrl!=this->State.FanCtrl) {
-				//TODO: Daten für Graph sammeln
-				//if (newfanctrl==0x80) { // switch to BIOS-auto mode
-				//	//this->ModeToDialog(1); // bios
-				//}
-				ok= this->SetFan(tpfancontrol::core::LegacySource::Smart, newfanctrl);
-			}
+		// T3-04 and T3-05. The level is not computed here any more.
+		//
+		// What used to be here: two scans of the smart table per cycle, picking
+		// a fan value from MaxTemp and writing it to the EC. It is gone, and
+		// the reason it can go is that the same table is now the core's curve
+		// (built in CoreInit) and the controller makes the decision - with the
+		// up/down thresholds, the validation and the "repeated command is not
+		// rewritten" rule that the two unscanned loops never had.
+		//
+		// The old scans had two properties worth naming, because losing them
+		// silently would be a regression rather than a cleanup. The first is
+		// the `fanctrl > 7` reset: a level left over from manual mode counted as
+		// "hot" and the up-scan only accepted a row whose fan was at least that
+		// high. The core's curve tracks its own index and its own command, so a
+		// level written by a different mode cannot drag it upwards - and the
+		// manual path now expires on its own (ADR-014) instead of leaving a
+		// value behind. The second is `newfanctrl != State.FanCtrl`: the
+		// duplicate-write suppression. AppBridge::apply refuses to rewrite a
+		// value that is already there, tested as
+		// testRepeatedCommandIsNotRewritten.
+		//
+		// The request is made every cycle rather than only when something
+		// changed, because "has anything changed" is now a question only the
+		// core can answer: it knows the curve index, the dwell time and whether
+		// the last write was verified. Deciding it here would be a second
+		// decision path, which is what this task is removing.
+		ok= this->SetFan(tpfancontrol::core::LegacySource::Smart, this->State.FanCtrl);
 
 
 	return ok;
@@ -387,11 +380,51 @@ FANCONTROL::SmartControl(void)
 //  set fan state via EC
 //-------------------------------------------------------------------------
 //-------------------------------------------------------------------------
-// T3-01/T3-02: bring up the portable core against the open port driver
+// T5-04: the public startup seam
+//-------------------------------------------------------------------------
+// CoreInit and the CoreStartup member are protected, because they are the
+// class's own state. The application's startup path is a free function, so it
+// needs a way in, and this is it: one call that starts the core and traces what
+// it decided.
+bool
+FANCONTROL::StartCore()
+{
+	const bool started= this->CoreInit();
+
+	if (started)
+		this->Trace(this->CoreStartup.statusLine.c_str());
+	else
+		this->Trace(this->CoreStartup.explanation.c_str());
+
+	return started;
+}
+
+const tpfancontrol::core::StartupAssessment&
+FANCONTROL::CoreStatus() const noexcept
+{
+	return this->CoreStartup;
+}
+
+//-------------------------------------------------------------------------
+// T5-04: whether the core may write anything at all
+//-------------------------------------------------------------------------
+// True in both monitor-only modes, including the one where there is no
+// backend and therefore nothing to read. It is not a fault state: the machine
+// is being used exactly as intended until a hardware report exists.
+bool
+FANCONTROL::CoreMonitorOnly(void) const noexcept
+{
+	return this->CoreStartup.monitorOnly;
+}
+
+//-------------------------------------------------------------------------
+//  build the core against the current driver handle
 //-------------------------------------------------------------------------
 // The backend wraps the driver's own port primitives, not the application's
 // register-level EC helpers. The EC protocol itself has exactly one
 // implementation in this codebase, and it is EcBus (ADR-020, ADR-023).
+//
+// T3-01/T3-02: bring up the portable core against the open port driver.
 bool
 FANCONTROL::CoreInit()
 {
@@ -400,10 +433,31 @@ FANCONTROL::CoreInit()
 	// driver reopen would go to a handle the driver no longer recognises.
 	CoreShutdown();
 
-	if (!::IsDriverOpened())
-		return false;		// monitor-only: nothing is opened, nothing is written
+	// T5-04. The startup decision comes first, and it is taken whether or not
+	// there is a driver: with no backend the application is in monitor-only
+	// mode with nothing to read, and the UI has to be able to say that instead
+	// of showing a blank pane. assessStartup is the same decision the status
+	// line and the refusal messages use, so there is one answer rather than
+	// three.
+	tpfancontrol::core::LegacyCapabilityInputs startupInputs;
+	startupInputs.backendPresent= true;
+	startupInputs.driverLoaded= ::IsDriverOpened() != FALSE;
+	startupInputs.controlRequestedByUser= (this->ActiveMode != 0);
+	startupInputs.hardwareExactMatch= this->CoreHardwareVerified;
+	startupInputs.profileVerified= this->CoreHardwareVerified;
+	startupInputs.topologyVerified= this->CoreHardwareVerified;
+	startupInputs.restoreCapabilityVerified= this->CoreHardwareVerified;
+	startupInputs.monitorOnlyForced= !this->CoreHardwareVerified;
+	this->CoreStartup= tpfancontrol::core::assessStartup(startupInputs);
 
-	tpfancontrol::core::LegacyPortPrimitives primitives;
+	if (!::IsDriverOpened()) {
+		// Monitor-only, and not even readings: the temperature sources are EC
+		// registers. Nothing is opened, nothing is written, and the fan stays
+		// with the firmware. The reason is in CoreStartup.explanation.
+		this->Trace(this->CoreStartup.statusLine.c_str());
+		this->Trace(this->CoreStartup.explanation.c_str());
+		return false;
+	}
 
 	// These are the driver's own port primitives - TVicPort's ReadPort and
 	// WritePort - and NOT FANCONTROL::ReadByteFromEC / WriteByteToEC.
@@ -417,18 +471,15 @@ FANCONTROL::CoreInit()
 	//
 	// There is now one implementation of the protocol, in EcBus, and this is the
 	// layer beneath it. See ADR-023.
-	primitives.readPort = [](std::uint16_t port, std::uint8_t& out) -> bool {
-		// ReadPort returns UCHAR, which is unsigned on this platform, so there is
-		// no signed-char round trip here. The core does the narrowing and widening
-		// explicitly; this layer only moves bytes.
-		out = ::ReadPort(port);
-		return true;
-		};
-
-	primitives.writePort = [](std::uint16_t port, std::uint8_t value) -> bool {
-		::WritePort(port, value);
-		return true;
-	};
+	//
+	// T5-01: the mapping from the DLL's entry points onto this port layer used
+	// to be written out again here, as two lambdas. It is now the same function
+	// the TVicPort adapter uses (makeTvicPortPrimitives), so the DLL's functions
+	// are described in one place. The driver handle itself stays with
+	// approot.cpp: this function opens nothing.
+	const tpfancontrol::core::TvicPortApi api = tpfancontrol::app::makeTvicPortApi();
+	const tpfancontrol::core::LegacyPortPrimitives primitives =
+		tpfancontrol::core::makeTvicPortPrimitives(api);
 
 	CoreBackend.reset(new tpfancontrol::core::LegacyBackend(primitives));
 	CoreBackend->setDriverOpen(true);
@@ -470,7 +521,70 @@ FANCONTROL::CoreInit()
 
 	CoreBridge.reset(new tpfancontrol::core::AppBridge(*CoreBackend, this->CoreClock, bridgeConfig));
 
+	// T3-04/T3-05. The legacy application chose the fan level with a table of
+	// (temperature, fan) rows scanned on every data cycle. That decision now
+	// belongs to the core's curve, built from the same configured table, so the
+	// table is input data instead of a decision procedure - and SmartControl
+	// does not compute a level at all any more.
+	//
+	// This does not enable anything: the curve is a candidate configuration,
+	// exactly like the table it came from, and the controller still refuses to
+	// issue a command until every Phase 0 verdict holds. A test asserts that
+	// with an empty CapabilityReport the mapped curve still produces no command.
+	this->ApplySmartLevelsToCore();
+
 	return true;
+}
+
+//-------------------------------------------------------------------------
+// T3-04: put the selected smart table into the core's curve
+//-------------------------------------------------------------------------
+// The legacy application selected a profile by copying SmartLevels1 or
+// SmartLevels2 over SmartLevels, and there are six places that do it - menu
+// items, buttons and the hotkey path. Each of them calls this afterwards.
+//
+// The rows come from SmartLevels, which the config parser has already converted
+// from Fahrenheit to Celsius, and which is terminated by a negative temperature.
+// Only the single-fan profile is mapped: the dual-fan tables belong to a
+// topology this project has not verified, and the core refuses to address an
+// individual fan (ADR-021), so reading them would produce a curve it could not
+// act on.
+void
+FANCONTROL::ApplySmartLevelsToCore(void)
+{
+	if (!this->CoreBridge)
+		return;		// monitor-only: nothing to install, nothing to command
+
+	tpfancontrol::core::LegacyCurveRow curveRows[32];
+	int curveRowCount= 0;
+	for (int i= 0; i < 32 && this->SmartLevels[i].temp >= 0; i++) {
+		curveRows[curveRowCount].temperatureC= this->SmartLevels[i].temp;
+		curveRows[curveRowCount].command= this->SmartLevels[i].fan;
+		curveRowCount++;
+	}
+
+	const tpfancontrol::core::LegacyCurveMapping mapping=
+		tpfancontrol::core::curveFromLegacyRows(curveRows, (std::size_t)curveRowCount);
+	const tpfancontrol::core::ValidationResult validation=
+		this->CoreBridge->setCurve(mapping.config);
+
+	// The table is a user file, so a refused one has to say which row was wrong
+	// and why: a log line saying "invalid curve" would leave the user with a
+	// fan that does not respond and no way to find out what to change. An
+	// invalid curve leaves the controller in monitor-only mode with reason
+	// "invalid_curve", which is the safe direction.
+	if (validation.valid) {
+		char tablebuf[128];
+		sprintf_s(tablebuf,sizeof(tablebuf),
+			"Core curve set from the smart table: %d row(s)", mapping.rowsUsed);
+		this->Trace(tablebuf);
+	}
+	else {
+		this->Trace("Core curve refused; monitor-only until the smart table is fixed:");
+		for (const tpfancontrol::core::ValidationError& error : validation.errors) {
+			this->Trace(("  " + error.code + ": " + error.message).c_str());
+		}
+	}
 }
 
 //-------------------------------------------------------------------------
@@ -556,14 +670,25 @@ FANCONTROL::SetFan(
 	this->CurrentDateTimeLocalized(datebuf, sizeof(datebuf));
 	
 
-	sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "%s: Set fan control to 0x%02x, ",
+	// The smart request is not a level: the level comes from the core's curve.
+	// Printing a value here would make the log line name a number that was never
+	// requested, which is exactly the sort of quiet lie this rewrite is meant to
+	// remove.
+	const bool curveRequest= (source == tpfancontrol::core::LegacySource::Smart);
+	if (curveRequest)
+		sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "%s: curve control requested, ",
+			 tpfancontrol::core::toText(source));
+	else
+		sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "%s: Set fan control to 0x%02x, ",
 			 tpfancontrol::core::toText(source), fanctrl & 0xFF);
 	sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "Result: ");
 
 	LegacyIntent intent;
 	intent.source= source;
 	intent.target= target;
-	intent.level= fanctrl;
+	// -1 for a curve request: LegacySource::Smart carries no level, and a
+	// placeholder that looked like one would end up in a refusal message.
+	intent.level= curveRequest ? -1 : fanctrl;
 	intent.final= (final != 0);
 	// The legacy application's own guard. It is passed on as data so the
 	// refusal that comes back says "monitor-only mode" rather than the caller
@@ -631,7 +756,14 @@ FANCONTROL::SetFan(
 		// the point of refusing one; a retry that re-issued an authorised one is
 		// AppBridge's business, not the dialog's.
 		if (!this->CoreBridge) {
-			sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "FAILED!! (core not initialised)");
+			// The core is not initialised, so nothing here may command the fan.
+			// The status field takes the one-line decision; the paragraph goes
+			// to the log. Putting the explanation in the status field would
+			// truncate it mid-sentence in a 256-byte buffer, and a truncated
+			// safety message is worse than a short one.
+			sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "REFUSED (no core: %s)",
+				this->CoreStartup.statusLine.c_str());
+			this->Trace(this->CoreStartup.explanation.c_str());
 			ok= false;
 		}
 		else {

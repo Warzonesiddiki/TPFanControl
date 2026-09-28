@@ -29,7 +29,10 @@ For each external dependency record:
 - install/uninstall method;
 - whether HVCI/Secure Boot were tested.
 
-See [DRIVER_BACKENDS.md](DRIVER_BACKENDS.md).
+See [DRIVER_BACKENDS.md](DRIVER_BACKENDS.md). The records themselves are in
+[DEPENDENCIES.md](DEPENDENCIES.md); `scripts/check_dependencies.py` fails when a
+recorded checksum no longer matches the file, when a dependency section is
+missing one of the ten fields, or when a tracked binary artefact has no record.
 
 ## 3. Clean checkout preparation
 
