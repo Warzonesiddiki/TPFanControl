@@ -1176,3 +1176,125 @@ lower than the INI default, the INI default should be lowered or the core's
 emergency made the only guard. If manual mode is kept long-term, its exit
 should be expressed as a core policy (expiry + emergency) rather than a UI
 timer.
+
+## ADR-030 — Sensor-agreement and failsafe-recovery policy (T2-12)
+
+**Status.** Accepted, T2-12. Unblocks T2-01, T2-02, T2-03, T2-06, T2-07, T2-08.
+
+**Context.** SAFETY.md §4 requires "at least three consecutive samples agree
+sufficiently" before control starts. The controller currently requires
+`startupValidSamples` (default 3) consecutive *valid* samples, but does not
+check that they agree — a single oscillating sensor can pass validation and
+pump the fan. Gap 6 is open. T2-06 asks for a test that oscillation
+10→70→20→75→40 °C does not pump the fan, which requires T2-01.
+
+SAFETY.md §6 says "Do not automatically return from failsafe until readings
+are valid for a configured cooldown period. The portable controller
+additionally latches emergency/failsafe decisions so that a temporary
+temperature drop cannot silently re-enable control." The current latch is
+permanent for the process lifetime (gap 7). T2-03 needs a product decision
+for cooldown and acknowledgement recovery, and T2-08 needs a test that the
+latch survives a clear attempt without acknowledgement.
+
+T2-02 asks what happens when one sensor source is lost while others remain.
+The current `hottestValidTemperature` takes the maximum over all valid sources,
+so one lost source does not block others, but there is no explicit policy.
+
+**Decision 1 — Sensor agreement (closes gap 6, enables T2-01, T2-06).**
+
+Startup validation requires `startupValidSamples` consecutive valid samples
+that also *agree*:
+
+- The last `startupValidSamples` maximum-temperature values (the hottest valid
+  reading each cycle) are stored.
+- Agreement means the absolute difference between any two consecutive values in
+  that window is ≤ `maximumSensorAgreementDeltaC` (default 10 °C, candidate
+  value, not hardware evidence).
+- If agreement fails, `consecutiveValidSamples_` is reset to 0 and the window
+  is cleared, so a new run of agreeing samples must be collected.
+- The check applies only to the startup gate (`Validating` → `Controlled`);
+  once controlled, normal curve hysteresis/dwell governs fan changes, not this
+  gate.
+
+Why consecutive-difference, not overall range: it allows a legitimate monotonic
+rise (40→50→60, diffs 10,10, range 20) to pass while rejecting wild oscillation
+(10→70→20, diffs 60,50). Overall range would reject the monotonic rise, which
+would delay control when the machine is actually heating.
+
+Why 10 °C: a candidate that is strict enough to catch 60 °C jumps but loose
+enough to allow 10 °C per-cycle rises during heating. Phase 0 must measure real
+thermal slew rates and replace it. The value is in `ControllerConfig` so a
+profile can override it.
+
+**Decision 2 — Single-source loss (T2-02, T2-07).**
+
+The aggregate is the maximum over valid sources. If one source becomes invalid
+(missing, stale, out-of-range), the aggregate uses the remaining valid sources.
+If *all* sources become invalid, the controller fails safe (existing behaviour:
+`temperature.valid == false` → `Validating` or `FailsafeBios` if previously
+controlling). No new code: this is the current `hottestValidTemperature`
+semantics, now documented as policy.
+
+If a source is lost while others remain, control continues on the remaining
+sources, but the event is visible via `temperatureSource` and `reasonCode`.
+A future T7 UI task will show per-source freshness (T7-02). No automatic
+degradation to monitor-only on single-source loss, because that would make a
+single flaky sensor disable control even when other sensors report high
+temperature — failing open in the opposite direction.
+
+**Decision 3 — Failsafe cooldown and acknowledgement (closes gap 7, enables
+T2-03, T2-08).**
+
+The latch (`safetyLatched_`) remains until **all** of the following hold:
+
+1. An explicit user acknowledgement: `requestBiosAutomatic` or `cancelManual`
+   (existing signals, already used to set `controlRequested_ = false`).
+2. A cooldown period: `failsafeCooldownMs` (default 30 000 ms, candidate)
+   of continuous valid, agreeing readings after acknowledgement.
+3. A fresh control request: `requestControl` or `requestManual` after cooldown.
+
+Until then, the controller stays in `FailsafeBios` (or `MonitorOnly` if restore
+unavailable) and reports `safety_latched` or `safety_latched_bios`.
+
+`controller.reset()` also clears the latch — process restart is still a valid
+recovery, but not the *only* one.
+
+Why 30 s: long enough to observe that the fault is not transient, short enough
+that a user who acknowledged does not wait minutes. Candidate, not measured.
+
+**Decision 4 — Repeated-suspect escalation (gap 9, T2-04).**
+
+Fan health `Suspect` (commanded level >0 but RPM 0) does not immediately
+latch. After `suspectThreshold` consecutive `Suspect` evaluations
+(default 3, candidate), it escalates to `Failed` and triggers failsafe. This
+is a separate counter from temperature validation. Implemented as part of T2-04,
+not this ADR, but the threshold is defined here.
+
+**Consequences.**
+
+- Startup now needs agreement, not just validity. A test with 10→70→20→75→40
+  will stay in `Validating` and never issue a command.
+- Failsafe recovery is possible without process restart, but requires explicit
+  ack + cooldown + re-request, so a temporary temperature dip cannot silently
+  re-enable control.
+- All thresholds are `ControllerConfig` fields, so a T14 profile can set them
+  from measured data.
+- No new EC writes, no driver interaction.
+
+**Testing and evidence.**
+
+- `testConsecutiveSamplesMustAgree` — three valid samples 10,70,20 do not pass
+  startup; three agreeing samples 40,42,44 do.
+- `testOscillationDoesNotPumpFan` — the 10→70→20→75→40 sequence never leaves
+  `Validating`, so no fan command is issued.
+- `testFailsafeLatchRequiresAckAndCooldown` — latch survives a clear attempt
+  without ack, and survives ack without cooldown.
+- `testSingleSourceLossContinuesOnOthers` — one source invalid, others valid,
+  aggregate still valid.
+
+**Revisit conditions.** Phase 0 measures real thermal slew rates (what is a
+normal per-cycle rise?) and real EC read jitter (how often do we see 60 °C
+jumps that are not real?). Replace 10 °C and 30 s with measured values, and
+record them in the hardware report. If a second independent temperature source
+(e.g., CPU MSR) is added, agreement should be checked across sources as well
+as across time.

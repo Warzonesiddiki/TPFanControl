@@ -96,7 +96,7 @@ are verified locally. Tasks are promoted to `[x]` only when a CI run supplies ev
 | T2-09 | Test: every restore path reports truthfully whether a BIOS command was issued | `[x]` | `testFailsafeReportsUnverifiedRestore`, `testShutdownReportsUnverifiedRestore`, `testVerifiedRestoreStillReportsBiosAutomatic` |
 | T2-10 | Test: manual override expires and is cancelled by invalid sensor data | `[x]` | `testControllerGatesAndManualExpiry`, `testCapabilityAndFailureGates` |
 | T2-11 | Test: emergency threshold is authoritative and validated | `[x]` | `testEmergencyThresholdValidation` |
-| T2-12 | Record the sensor-agreement and failsafe-recovery policy decisions | `[!]` | Blocks T2-01, T2-02, T2-03. Needs an ADR |
+| T2-12 | Record the sensor-agreement and failsafe-recovery policy decisions | `[x]` | ADR-030: sensor agreement (consecutive-difference ≤10°C over 3 samples), single-source loss continues on remaining sources, failsafe cooldown 30s + explicit ack + re-request. Unblocks T2-01, T2-02, T2-03. |
 | T2-13 | Define the portable core's event/logging interface | `[ ]` | Blocks T2-05 and much of T7 |
 | T2-14 | Keep the curve validator and the controller's runtime curve in agreement | `[x]` | `testCurveShapeValidation`, `testCurveValidationAndHysteresis` |
 
@@ -489,8 +489,8 @@ passing portable test.
 | 3 | §5 emergency threshold is authoritative | **Closed** — a non-positive or too-low threshold is rejected and the controller stays in monitor-only |
 | 4 | §10 reading within a plausible model range | **Closed** — range narrowed to 0…110 °C; the cold end is the severe direction. Values remain CANDIDATE until Phase 0 |
 | 5 | §6.2 report whether a restore was actually commanded | **Closed** — `biosRestoreIssued` and `ControlMode::RestoreUnavailable` |
-| 6 | §4 at least three consecutive samples agree sufficiently | **Open** — a single oscillating sensor can still pump the fan. Blocked on T2-12 |
-| 7 | §6.3 cooldown/acknowledgement recovery | **Open** — the latch is permanent for the process lifetime. Blocked on T2-12 |
+| 6 | §4 at least three consecutive samples agree sufficiently | **Policy decided** — ADR-030 defines agreement as consecutive-difference ≤10°C over 3 samples. Implementation pending T2-01. |
+| 7 | §6.3 cooldown/acknowledgement recovery | **Policy decided** — ADR-030 defines cooldown 30s + explicit ack (requestBiosAutomatic/cancelManual) + re-request. Latch currently permanent; recovery pending T2-03. |
 | 8 | [PROFILES.md](PROFILES.md) §4 curve rules | **Closed** — minimum point count and first-point ceiling |
 | 9 | §6.1 impossible RPM or tachometer behaviour → `Failed` | **Partly closed (T5-08)** — implausible, sentinel, stale and future-dated readings are all rejected, and `evaluateFanHealth` now reports `Failed` for every one of them instead of `Healthy`. **Open:** there is still no repeated-suspect escalation rule, and a uniformly stuck sensor set remains undetectable from a single reading stream |
 | 10 | §11 log each fan command and readback result | **Open** — the portable core has no logging. Blocked on T2-13 |
@@ -516,7 +516,7 @@ policy questions rather than defects with an obvious correct answer.
 | Backend/HVCI compatibility unknown | PawnIO spike (T5-02) and TVicPort load test (T4-06) | Open |
 | x64 application cannot link the vendored 32-bit TVicPort import library | Obtain and record the vendor's 64-bit package, or keep the baseline Win32-only; T1-01's build log is the evidence | Open |
 | Final T14 curve unknown | Collect telemetry after control validation | Open |
-| Sensor-agreement and failsafe-recovery policy | Product decision, ADR required (T2-12) | Open |
+| ~~Sensor-agreement and failsafe-recovery policy~~ | ADR-030 decided; implementation pending T2-01/T2-03 | Closed |
 
 ---
 
