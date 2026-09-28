@@ -28,6 +28,11 @@
 *.lastbuildstate
 *.unsuccessfulbuild
 
+# The CI definition is version-controlled at ci/ci.yml so it lives in git.
+# Enabling it requires writing .github/workflows/, which the sandbox's GitHub
+# App token is not permitted to do. See ci/README.md.
+.github/
+
 # Visual Studio user state and databases
 .vs/
 *.VC.db

@@ -59,11 +59,19 @@ until Phase 0 completes.
 | T1-05 | Fix baseline legacy warnings so the whole project can reach `/W4` | `[-]` | Legacy raised `/W3`→`/W4` (warning-only until clean). The actual warning list is only observable under MSVC; the `windows-build` job archives the log to drive the fixes. **Not verified.** |
 | T1-06 | UTF-8 source handling; explicit runtime library choice | `[x]` | ADR-018. All tracked text files are valid UTF-8; UTF-8 BOM on every source. `/source-charset:utf-8` on legacy, `/utf-8` on ASCII-only core. `/MT` app, `/MD` tests. Verified locally. |
 | T1-07 | Audit and fix pointer-sized Win32 APIs: `SetWindowLong`/`GetWindowLong` in `fancontrol.cpp` and `SystemTraySDK.cpp`; `ULONG` thread callback in `misc.cpp` | `[x]` | `SetWindowLongPtr`/`GetWindowLongPtr`/`GWLP_USERDATA`/`LONG_PTR` applied across all three code trees. Thread callback changed `ULONG`→`LPVOID` and `CreateThread`→`_beginthreadex` (the worker is created and destroyed every data cycle, so `CreateThread` leaked a CRT block per cycle). Repo-wide grep finds zero remaining 32-bit window APIs. Verified locally. |
-| T1-08 | Add CI: run `tests/run_core_tests.sh` on Linux, macOS, and Windows | `[-]` | `.github/workflows/ci.yml` job `portable-tests`, matrix `ubuntu`/`macos`/`windows`, plus an ASan+UBSan leg. Workflow YAML validated; script runs locally. Awaiting a green run. **Not verified.** |
-| T1-09 | Add CI: Release build with warnings-as-errors on the core | `[-]` | Job `release-warnings-as-errors` builds both test projects Release x64 and runs them, then asserts `/W4 /WX /permissive- /EHsc` actually reached every core unit. Awaiting a green run. **Not verified.** |
-| T1-10 | Add CI: `git diff --check` and a link check | `[-]` | Job `hygiene` runs `git diff --check`, `scripts/check_links.py`, a no-tracked-artifacts check, and a UTF-8 check. The link checker was negative-tested (3 seeded defects, all caught) and passes locally. Awaiting a green run. **Not verified.** |
+| T1-08 | Add CI: run `tests/run_core_tests.sh` on Linux, macOS, and Windows | `[-]` | `ci/ci.yml` job `portable-tests`, matrix `ubuntu`/`macos`/`windows`, plus an ASan+UBSan leg. Workflow YAML validated; script runs locally. Awaiting a green run, and awaiting the workflow being enabled. **Not verified.** |
+| T1-09 | Add CI: Release build with warnings-as-errors on the core | `[-]` | Job `release-warnings-as-errors` builds both test projects Release x64 and runs them, then asserts `/W4 /WX /permissive- /EHsc` actually reached every core unit. Awaiting a green run, and awaiting the workflow being enabled. **Not verified.** |
+| T1-10 | Add CI: `git diff --check` and a link check | `[-]` | Job `hygiene` runs `git diff --check`, `scripts/check_links.py`, a no-tracked-artifacts check, and a UTF-8 check. The link checker was negative-tested (3 seeded defects, all caught) and passes locally. Awaiting a green run, and awaiting the workflow being enabled. **Not verified.** |
 | T1-11 | Add a Windows test target so the suite runs on Windows | `[-]` | `tests/core_tests.vcxproj` and `tests/ec_protocol_tests.vcxproj` build the same sources as `run_core_tests.sh`, 4 configurations each, `/W4` `/WX`, both in the solution. XML validated. Awaiting execution in CI. **Not verified.** |
-| T1-12 | Add static analysis to CI (clang-tidy or MSVC `/analyze`) | `[-]` | Job `static-analysis` runs MSVC `/analyze` on the core (enforced) and the app (reported, `continue-on-error` pending T1-05), and archives a summary. Awaiting a green run. **Not verified.** |
+| T1-12 | Add static analysis to CI (clang-tidy or MSVC `/analyze`) | `[-]` | Job `static-analysis` runs MSVC `/analyze` on the core (enforced) and the app (reported, `continue-on-error` pending T1-05), and archives a summary. Awaiting a green run, and awaiting the workflow being enabled. **Not verified.** |
+
+**CI enablement blocker.** The workflow is version-controlled at
+[`ci/ci.yml`](../ci/ci.yml), not `ci/ci.yml`'s runtime location
+`.github/workflows/ci.yml`, because the push credential in this environment is a
+GitHub App token without the `workflows` permission and is refused when creating
+that path. The file is therefore tracked rather than left unversioned, and
+`ci/README.md` records the one-command enable step for a maintainer with the
+right permission. No green run exists, so T1-08 … T1-12 stay `[-]`.
 
 **T1 environment note.** No Windows toolchain is available in the authoring environment
 (`g++ 12.2`, Python 3.11 only; no `msbuild`, `cl.exe`, `dotnet`, CMake, or `clang++`).
