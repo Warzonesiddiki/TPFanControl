@@ -1,4 +1,4 @@
-
+﻿
 // --------------------------------------------------------------
 //
 //  Thinkpad Fan Control
@@ -172,7 +172,7 @@ FANCONTROL::FANCONTROL(HINSTANCE hinstapp)
 		strcat_s(this->Title,sizeof(this->Title), this->Title3);
 		::SetWindowText(this->hwndDialog, this->Title);
 
-		::SetWindowLong(this->hwndDialog, GWL_USERDATA, (ULONG)this);
+		::SetWindowLongPtr(this->hwndDialog, GWLP_USERDATA, (LONG_PTR)this);
 		::SendDlgItemMessage(this->hwndDialog, 8112, EM_LIMITTEXT, 256, 0);
 		::SendDlgItemMessage(this->hwndDialog, 9200, EM_LIMITTEXT, 4096, 0);
 		::SetDlgItemText(this->hwndDialog, 8310, "7");
@@ -264,7 +264,7 @@ FANCONTROL::BaseDlgProc(HWND hwnd, ULONG msg, WPARAM mp1, LPARAM mp2)
 	{
 		s_TaskbarCreated = RegisterWindowMessage("TaskbarCreated");
 	}
-	FANCONTROL *This= (FANCONTROL*)GetWindowLong(hwnd, GWL_USERDATA);
+	FANCONTROL *This= (FANCONTROL*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
 	if (This)
 	{
@@ -592,7 +592,7 @@ FANCONTROL::WorkThread()
 								CCurrentMode, MaxTemp, SensorName, CCurrentICON, fanspeed, fanstate);
 							this->Trace(str_value);
 							strcpy_s(Title2,sizeof(Title2), "");
-							sprintf_s(this->Title2, sizeof(this->Title2), "%d� Fan %d (%s) %d rpm ",
+							sprintf_s(this->Title2, sizeof(this->Title2), "%d° Fan %d (%s) %d rpm ",
 								this->MaxTemp, fanstate, CCurrentMode, fanspeed);
 						}
 					}

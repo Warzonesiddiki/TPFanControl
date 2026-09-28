@@ -81,7 +81,11 @@ msbuild .\fancontrol\fancontrol.sln `
   /p:OutDir="$pwd\out\Release-x64\"
 ```
 
-Do not document this command as usable until the solution contains the x64 configuration.
+The solution now contains the x64 configuration, so this command is usable. It has been
+declared and XML-validated, but it has **not** been executed: no MSVC toolchain is
+available in the authoring environment, and the first real build is the
+`windows-build` CI job (T1-01). Treat the command as unverified until that job is
+green.
 
 ## 6. Compiler requirements
 
@@ -106,6 +110,37 @@ LONG_PTR
 ```
 
 Do not replace a pointer cast with another integer cast of a different width.
+
+### What is actually set (T1-04, T1-06, T1-07)
+
+| Setting | Legacy application sources | `fancontrol/core/*` and the test projects |
+|---|---|---|
+| Warning level | `/W4` | `/W4` + `/WX` |
+| `/permissive-`, `/EHsc` | inherited defaults | explicit |
+| Source charset | `/source-charset:utf-8` | `/utf-8` |
+| Runtime library | `/MT` (static) | `/MD` in the test executables, inherited `/MT` in the app |
+| Output | `out/$(Platform)/$(Configuration)/` | `out/tests/$(Platform)/$(Configuration)/` |
+
+`/utf-8` is **not** used on the legacy sources. It sets the execution charset as
+well as the source charset, which would make the narrow degree-sign literals
+(`"%d°C"`, `"Fan: 0x%02x / Switch: %d°C (%s)"`) render as `Â°` in the ANSI UI.
+`/source-charset:utf-8` plus a UTF-8 BOM decodes the source deterministically while
+leaving the execution charset at the system ANSI code page, which is correct for an
+ANSI application. See [DECISIONS.md](DECISIONS.md) ADR-018.
+
+Every source file carries a UTF-8 BOM. During T1 this was found to be a live bug, not
+a style choice: `fanstuff.cpp` was the only file containing non-ASCII literals *without*
+a BOM, so it was decoded through the ANSI code page and produced `Â°` in the
+minimised-window title and the fan-status string on every build.
+
+Pointer-sized API fixes applied for x64 (T1-07): `SetWindowLong`/`GetWindowLong`
+→ `SetWindowLongPtr`/`GetWindowLongPtr`, `GWL_USERDATA` → `GWLP_USERDATA`,
+`(ULONG)this` → `(LONG_PTR)this`, in all three code trees (`fancontrol/`,
+`TPFCIcon/`, `TPFCIcon_noballons/`). The worker thread entry point was changed from
+`ULONG` to `LPVOID`, which truncates a pointer on x64, and `CreateThread` was
+replaced with `_beginthreadex`: the worker is created and destroyed once per data
+cycle, and `CreateThread` neither initialises nor releases the per-thread CRT block, so
+each cycle leaked one.
 
 ## 7. Output layout
 
@@ -149,3 +184,54 @@ Use [TESTING.md](TESTING.md) for the evidence format.
 - [ ] Release build does not enable unsafe expert options by default.
 - [ ] `git diff --check` passes.
 - [ ] Tests pass without a physical device.
+
+
+## 11. Windows test target
+
+`tests/core_tests.vcxproj` builds the portable core suite under MSVC. It compiles
+exactly the same translation units as `tests/run_core_tests.sh`, so the two paths
+cannot drift:
+
+| Source | Role |
+|---|---|
+| `tests/core_tests.cpp` | the 20 test cases, `main()` |
+| `tests/fake_backend.cpp` | in-memory `io_backend`, no hardware |
+| `fancontrol/core/*.cpp` | the portable core |
+
+It is a `Console` project linked with `/MD`, so it shares no CRT with the
+application and needs no driver, no device, and no administrator rights. It is
+built at `/W4 /WX` in all four configurations. It is a member of
+`fancontrol/fancontrol.sln` but deliberately has **no** project dependency on the
+application, so running the tests never forces a build of the executable.
+
+```powershell
+msbuild tests\core_tests.vcxproj /p:Configuration=Release /p:Platform=x64
+.\out\tests\x64\Release\core_tests.exe
+```
+
+The suite never touches EC registers. It uses a fake backend, so it is safe to run on
+any machine, including one with no ThinkPad hardware.
+
+## 12. Continuous integration
+
+`.github/workflows/ci.yml` defines five jobs. None of them load a kernel driver or
+write to an EC register.
+
+| Job | Runs on | Covers |
+|---|---|---|
+| `portable-tests` | ubuntu, macos, windows | `tests/run_core_tests.sh`; plus ASan + UBSan on the non-Windows legs |
+| `windows-build` | windows | `Debug`/`Release` x `Win32`/`x64`; runs `core_tests.exe`; archives the build log |
+| `release-warnings-as-errors` | windows | Release x64 core build with warnings-as-errors, the suite, and a step that asserts the flags actually reached every core unit |
+| `hygiene` | ubuntu | `git diff --check`, Markdown link check, no tracked build artifacts, all text files valid UTF-8 |
+| `static-analysis` | windows | MSVC `/analyze` on the core (enforced) and the application (reported until T1-05 closes) |
+
+The `hygiene` job runs `scripts/check_links.py`, which resolves every relative
+Markdown link and in-document anchor against the tracked files. External `http(s)`
+and `mailto` links are counted but never fetched, so the check stays offline and
+hermetic. The script has been negative-tested: seeded broken file links, broken
+anchors, and absolute filesystem paths are all reported and it exits non-zero.
+
+Because the core is compiled with `/WX`, any new warning in `fancontrol/core/*` fails
+the build. The legacy sources are `/W4` but warning-only until their baseline is
+clean — that is task T1-05, which needs the `windows-build` log to enumerate the
+actual list.

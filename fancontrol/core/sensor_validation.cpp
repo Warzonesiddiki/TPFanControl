@@ -1,4 +1,4 @@
-#include "sensor_validation.h"
+﻿#include "sensor_validation.h"
 
 #include <algorithm>
 #include <limits>

@@ -1,4 +1,4 @@
-#include "controller.h"
+﻿#include "controller.h"
 
 namespace tpfancontrol {
 namespace core {

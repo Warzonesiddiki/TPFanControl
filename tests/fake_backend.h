@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "../fancontrol/core/io_backend.h"
 

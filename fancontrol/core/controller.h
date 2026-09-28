@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "fan_curve.h"
 #include "sensor_validation.h"

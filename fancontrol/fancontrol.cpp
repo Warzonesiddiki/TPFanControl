@@ -326,7 +326,7 @@ FANCONTROL::FANCONTROL(HINSTANCE hinstapp)
 		strcat_s(this->Title,sizeof(this->Title), this->Title3);
 		::SetWindowText(this->hwndDialog, this->Title);
 
-		::SetWindowLong(this->hwndDialog, GWL_USERDATA, (ULONG)this);
+		::SetWindowLongPtr(this->hwndDialog, GWLP_USERDATA, (LONG_PTR)this);
 		::SendDlgItemMessage(this->hwndDialog, 8112, EM_LIMITTEXT, 256, 0);
 		::SendDlgItemMessage(this->hwndDialog, 9200, EM_LIMITTEXT, 4096, 0);
 		::SetDlgItemText(this->hwndDialog, 8310, _itoa(this->ManFanSpeed, buf ,10));
@@ -359,7 +359,7 @@ FANCONTROL::FANCONTROL(HINSTANCE hinstapp)
 		if (SlimDialog == 0) strcat_s(this->Title,sizeof(this->Title), this->Title3);
 		::SetWindowText(this->hwndDialog, this->Title);
 
-		::SetWindowLong(this->hwndDialog, GWL_USERDATA, (ULONG)this);
+		::SetWindowLongPtr(this->hwndDialog, GWLP_USERDATA, (LONG_PTR)this);
 		::SendDlgItemMessage(this->hwndDialog, 8112, EM_LIMITTEXT, 256, 0);
 		::SendDlgItemMessage(this->hwndDialog, 9200, EM_LIMITTEXT, 4096, 0);
 		::SetDlgItemText(this->hwndDialog, 8310, _itoa(this->ManFanSpeed, buf, 10));
@@ -599,7 +599,7 @@ FANCONTROL::BaseDlgProc(HWND hwnd, ULONG msg, WPARAM mp1, LPARAM mp2)
 	{
 		s_TaskbarCreated = RegisterWindowMessage("TaskbarCreated");
 	}
-	FANCONTROL *This= (FANCONTROL*)GetWindowLong(hwnd, GWL_USERDATA);
+	FANCONTROL *This= (FANCONTROL*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
 	if (This)
 	{
@@ -1331,7 +1331,7 @@ switch (msg) {
 		case WM__GETDATA:
 			if (!this->hThread && !this->FinalSeen) 
 			{
-				this->hThread= this->CreateThread(FANCONTROL_Thread, (ULONG)this);
+				this->hThread= this->CreateThread(FANCONTROL_Thread, (LPVOID)this);
 			}
 			break;
 

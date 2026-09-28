@@ -107,3 +107,8 @@ __pycache__/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Visual Studio writes this upgrade log into the project directory. It is
+# generated state and was previously tracked; `git add -A` re-added it once
+# because no rule covered it.
+UpgradeLog.htm

@@ -1,4 +1,4 @@
-#include "../fancontrol/core/controller.h"
+﻿#include "../fancontrol/core/controller.h"
 #include "fake_backend.h"
 
 #include <cassert>

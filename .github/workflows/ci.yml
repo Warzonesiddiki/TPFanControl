@@ -1,0 +1,278 @@
+name: CI
+
+# Tasks covered:
+#   T1-08  portable core tests on Linux, macOS and Windows
+#   T1-09  Release build with warnings-as-errors on the core
+#   T1-10  git diff --check and a link check
+#   T1-11  Windows test target
+#   T1-12  static analysis (MSVC /analyze)
+#
+# The legacy Win32 application can only be compiled on Windows, so the portable
+# jobs deliberately do not build it. No job in this workflow touches hardware or
+# loads a kernel driver.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------- T1-08 ----
+  portable-tests:
+    name: Portable core tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same script is the single entry point on every platform. On Windows
+      # it runs under the Git Bash that ships with the runner image.
+      - name: Run portable core tests
+        shell: bash
+        run: ./tests/run_core_tests.sh
+
+      - name: Run under AddressSanitizer and UndefinedBehaviorSanitizer
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -eu
+          BUILD_DIR="${TMPDIR:-/tmp}/tpfancontrol-core-san"
+          mkdir -p "$BUILD_DIR"
+          CXX="${CXX:-g++}"
+          for suite in core_tests ec_protocol_tests; do
+            if [ "$suite" = core_tests ]; then
+              FAKE=tests/fake_backend.cpp
+            else
+              FAKE=tests/fake_ec.cpp
+            fi
+            "$CXX" -std=c++17 -Wall -Wextra -Werror -pedantic \
+              -fsanitize=address,undefined -fno-omit-frame-pointer -g \
+              -I fancontrol/core \
+              fancontrol/core/*.cpp \
+              "$FAKE" \
+              "tests/$suite.cpp" \
+              -o "$BUILD_DIR/${suite}_san"
+            "$BUILD_DIR/${suite}_san"
+          done
+
+  # ---------------------------------------------------------------- T1-11 ----
+  windows-build:
+    name: Windows ${{ matrix.configuration }}|${{ matrix.platform }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+        platform: [Win32, x64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Show toolset
+        run: msbuild -version
+
+      - name: Build solution
+        run: >
+          msbuild fancontrol/fancontrol.sln
+          /m
+          /p:Configuration=${{ matrix.configuration }}
+          /p:Platform=${{ matrix.platform }}
+          /v:normal
+          /nologo
+          /fl /flp:LogFile=build-${{ matrix.configuration }}-${{ matrix.platform }}.log;Verbosity=normal
+
+      # The core is compiled with /W4 /WX, so this step fails the job on any new
+      # core warning. Legacy sources are /W4 but warning-only until their
+      # baseline is clean (task T1-05).
+      - name: Run Windows test target
+        shell: cmd
+        run: out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\core_tests.exe
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.configuration }}-${{ matrix.platform }}
+          path: build-${{ matrix.configuration }}-${{ matrix.platform }}.log
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------- T1-09 ----
+  release-warnings-as-errors:
+    name: Release core, warnings as errors
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build Release test target with warnings-as-errors
+        run: >
+          msbuild tests\core_tests.vcxproj
+          /m
+          /p:Configuration=Release
+          /p:Platform=x64
+          /p:TreatWarningAsError=true
+          /p:RunCodeAnalysis=false
+          /nologo
+          /v:normal
+          /fl /flp:LogFile=build-core-wx.log;Verbosity=normal
+
+      - name: Run tests
+        shell: cmd
+        run: out\tests\x64\Release\core_tests.exe
+
+      - name: Confirm the core really was compiled with /W4 and /WX
+        # Guards against the flag silently not being applied, which would make
+        # this job pass vacuously. Fails if a core translation unit is seen
+        # without both flags.
+        shell: pwsh
+        run: |
+          $log = Get-Content build-core-wx.log -Raw
+          $coreUnits = @('core_types', 'sensor_validation', 'fan_curve', 'controller', 'io_backend')
+          $fail = @()
+          foreach ($u in $coreUnits) {
+            $lines = $log -split "`r?`n" | Where-Object { $_ -match "$u\.cpp" -and $_ -match '\bcl\.exe\b|compiler' }
+            if (-not $lines) { $fail += "$u.cpp : no compile line found in the log"; continue }
+            $joined = $lines -join "`n"
+            if ($joined -notmatch '/W4')          { $fail += "$u.cpp : /W4 not present" }
+            if ($joined -notmatch '/WX')          { $fail += "$u.cpp : /WX not present" }
+            if ($joined -notmatch '/permissive-') { $fail += "$u.cpp : /permissive- not present" }
+            if ($joined -notmatch '/EHsc')        { $fail += "$u.cpp : /EHsc not present" }
+          }
+          if ($fail) {
+            $fail | ForEach-Object { "::error::$_" }
+            exit 1
+          }
+          Write-Host "all $($coreUnits.Count) core units compiled with /W4 /WX /permissive- /EHsc"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-warnings-as-errors-log
+          path: build-core-wx.log
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------- T1-10 ----
+  hygiene:
+    name: Repository hygiene and link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Whitespace errors (git diff --check)
+        run: |
+          set -eu
+          # --check against the merge base, since a plain `git diff --check`
+          # compares the working tree to HEAD and would see no staged changes.
+          if git rev-parse --verify "origin/${{ github.base_ref || 'main' }}" >/dev/null 2>&1; then
+            git diff --check "origin/${{ github.base_ref || 'main' }}...HEAD"
+          else
+            git diff --check HEAD~1 HEAD || git diff --check
+          fi
+
+      - name: Markdown link check
+        run: python3 scripts/check_links.py
+
+      - name: No build artifacts tracked
+        run: |
+          set -eu
+          if git ls-files | grep -Ei '\.(obj|exe|pdb|ilk|pch|res|tlb|idb|exp|lib)$' \
+             | grep -v '^fancontrol/TVicPort\.lib$'; then
+            echo "::error::generated build artifacts are tracked in git"
+            exit 1
+          fi
+          echo "no generated build artifacts tracked (TVicPort.lib is the reviewed vendor import)"
+
+      - name: Every source file is valid UTF-8
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import subprocess, sys
+          files = subprocess.check_output(
+              ["git", "ls-files", "*.cpp", "*.h", "*.md", "*.yml", "*.py", "*.sh"],
+              text=True).split()
+          bad = []
+          for f in files:
+              data = open(f, "rb").read()
+              try:
+                  data.decode("utf-8")
+              except UnicodeDecodeError as exc:
+                  bad.append(f"{f}: {exc}")
+          if bad:
+              print("::error::files are not valid UTF-8:")
+              for b in bad:
+                  print("  " + b)
+              sys.exit(1)
+          print(f"all {len(files)} text source file(s) are valid UTF-8")
+          PY
+
+  # ---------------------------------------------------------------- T1-12 ----
+  static-analysis:
+    name: MSVC static analysis
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Analyse the core
+        run: >
+          msbuild tests/core_tests.vcxproj
+          /p:Configuration=Release
+          /p:Platform=x64
+          /p:RunCodeAnalysis=true
+          /p:EnableCodeAnalysis=true
+          /nologo
+          /v:normal
+          /fl /flp:LogFile=analyze-core.log;Verbosity=normal
+
+      - name: Analyse the application
+        # Warning-only: the legacy baseline is not clean yet (task T1-05), so
+        # analysis findings are published rather than enforced.
+        continue-on-error: true
+        run: >
+          msbuild fancontrol/fancontrol.vcxproj
+          /p:Configuration=Release
+          /p:Platform=x64
+          /p:RunCodeAnalysis=true
+          /p:EnableCodeAnalysis=true
+          /nologo
+          /v:normal
+          /fl /flp:LogFile=analyze-app.log;Verbosity=normal
+
+      - name: Collect analysis findings
+        if: always()
+        shell: pwsh
+        run: |
+          $logs = Get-ChildItem -Path . -Filter 'analyze-*.log' -ErrorAction SilentlyContinue
+          $summary = foreach ($log in $logs) {
+            $text = Get-Content $log.FullName -Raw
+            [PSCustomObject]@{
+              Log      = $log.Name
+              Errors   = ([regex]::Matches($text, ': error ')).Count
+              Warnings = ([regex]::Matches($text, ': warning ')).Count
+            }
+          }
+          $summary | Format-Table | Out-String | Tee-Object -FilePath analysis-summary.txt
+
+      - name: Upload analysis report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-analysis-reports
+          path: |
+            analyze-core.log
+            analyze-app.log
+            analysis-summary.txt
+          if-no-files-found: warn

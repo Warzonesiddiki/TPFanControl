@@ -1114,7 +1114,7 @@ void CSystemTray::MinimiseToTray(HWND hWnd)
     }
 
     RemoveTaskbarIcon(hWnd);
-	SetWindowLong(hWnd, GWL_STYLE, GetWindowLong(hWnd, GWL_STYLE) &~ WS_VISIBLE);
+	SetWindowLongPtr(hWnd, GWL_STYLE, GetWindowLongPtr(hWnd, GWL_STYLE) &~ WS_VISIBLE);
 #endif
 }
 
@@ -1135,7 +1135,7 @@ void CSystemTray::MaximiseFromTray(HWND hWnd)
     else
         ::SetParent(hWnd, NULL);
 
-	SetWindowLong(hWnd, GWL_STYLE, GetWindowLong(hWnd, GWL_STYLE) | WS_VISIBLE);
+	SetWindowLongPtr(hWnd, GWL_STYLE, GetWindowLongPtr(hWnd, GWL_STYLE) | WS_VISIBLE);
     RedrawWindow(hWnd, NULL, NULL, RDW_UPDATENOW | RDW_ALLCHILDREN | RDW_FRAME |
                        RDW_INVALIDATE | RDW_ERASE);
 

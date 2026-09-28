@@ -1,4 +1,4 @@
-# Implementation checklist
+﻿# Implementation checklist
 
 Use this file as the project execution board. It is the **single source of truth** for
 what is actually done. Do not mark an item complete without its evidence.
@@ -22,7 +22,7 @@ Legend:
 |---|---|
 | Documented safety gaps closed | 6 of 10 (gaps 1, 2, 3, 4, 5, 8) |
 | Portable-core test functions | 20 core + 25 backend/EC |
-| Work packages complete | 1 of 10 (T0) |
+| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run |
 | Critical path | T0 → T1 → T5 → T3 → T4 → T6 → T8 |
 | Biggest single risk | The portable core is not connected to the application. It is compiled by the project and tested, but no legacy file includes a core header, so the safety state machine is dead code that can drift from shipped behaviour indefinitely without any signal. |
 

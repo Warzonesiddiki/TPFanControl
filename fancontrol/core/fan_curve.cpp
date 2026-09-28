@@ -1,4 +1,4 @@
-#include "fan_curve.h"
+﻿#include "fan_curve.h"
 
 #include <sstream>
 

@@ -1,4 +1,4 @@
-#include "_prec.h"
+﻿#include "_prec.h"
 
 //begin named pipe TPFanControl01
 #define g_szPipeName "\\\\.\\Pipe\\TPFanControl01"  //Name given to the pipe

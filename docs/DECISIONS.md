@@ -183,3 +183,61 @@ accepted, not overlooked.
 If any condition holds, use `git filter-repo --path fancontrol/.vs --path fancontrol/Debug
 --path fancontrol/Release --path fancontrol/ipch --invert-paths` and coordinate with
 anyone holding a clone.
+
+---
+
+## ADR-018 — Source encoding: UTF-8 BOM, not `/utf-8`
+
+**Status.** Accepted (T1-06)
+
+**Context.** `fancontrol.vcxproj` is a `MultiByte` (ANSI) build. Several legacy
+sources contain user-visible degree signs in narrow string literals — for example
+`sprintf_s(title2, sizeof(title2), "%d°C", this->MaxTemp)` in
+`fancontrol/fanstuff.cpp`, which feeds the minimised-window title, and
+`"Fan: 0x%02x / Switch: %d°C (%s)"` in the same file, which is shown on hover.
+
+MSVC has two independent charset knobs:
+
+- the **source charset**, which decides how bytes in the file are decoded, and
+- the **execution charset**, which decides how a decoded character is re-encoded
+  into a narrow (`char`) string literal.
+
+`/utf-8` sets *both* to UTF-8. `/source-charset:utf-8` sets only the first and
+leaves the execution charset at the system ANSI code page (cp1252 on Western
+Windows). A UTF-8 **BOM** overrides the source charset regardless of flags.
+
+**Decision.**
+
+1. Use `/source-charset:utf-8` on the legacy translation units, not `/utf-8`.
+2. Put a UTF-8 BOM on every source file in the repository. A BOM makes source
+   decoding deterministic and independent of the machine's code page.
+3. Use `/utf-8` only on `fancontrol/core/*`, which is pure ASCII, so the
+   execution charset cannot change the meaning of any literal there.
+4. Keep the runtime library explicit and uniform: `/MT` for the application,
+   `/MD` for the standalone test executables.
+
+**Reasons.** With `/utf-8`, a narrow literal keeps its UTF-8 bytes `C2 B0`; the
+ANSI window then decodes those through cp1252 and renders `Â°`. With
+`/source-charset:utf-8`, the BOM-decoded `U+00B0` is re-encoded to the single
+cp1252 byte `B0`, which the window renders as `°`. The second is correct, and it
+is also what the project did before this change by accident.
+
+This is not hypothetical. During T1 it was found that `fanstuff.cpp` was the only
+source containing non-ASCII literals *without* a BOM, so it was decoded through
+the ANSI code page and the same `Â°` mojibake was produced on every build. The
+BOM policy in (2) is what fixes it. The two sibling projects `TPFCIcon/` and
+`TPFCIcon_noballons/` were genuinely cp1252-encoded and have been converted to
+UTF-8; their non-ASCII content is limited to comments and one title literal, and
+the ASCII skeleton of every file was verified byte-identical across the
+conversion.
+
+**Consequence.** Rendering of non-ASCII text remains dependent on the machine's
+ANSI code page, which is inherent to an ANSI application. On a system whose ACP
+is not cp1252 the degree sign will not render correctly. Fixing that properly
+means converting the application to `CharacterSet=Unicode`, which is a
+substantive behavioural change to every string in the codebase and is out of
+scope for T1.
+
+**Revisit conditions.** Revisit if the project moves to `CharacterSet=Unicode`,
+at which point `/utf-8` becomes correct for the legacy sources too and this ADR
+should be superseded.

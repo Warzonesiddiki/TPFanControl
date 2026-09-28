@@ -1,4 +1,4 @@
-
+﻿
 // --------------------------------------------------------------
 //
 //  Thinkpad Fan Control
@@ -200,8 +200,10 @@ class FANCONTROL
 
 
 
-		static int _stdcall FANCONTROL_Thread(ULONG parm) \
-                        { return ((FANCONTROL *)parm)->WorkThread(); }
+		// The parameter must be LPVOID, not ULONG: on x64 a 32-bit parameter
+		// truncates the pointer and the worker dereferences garbage.
+		static unsigned __stdcall FANCONTROL_Thread(LPVOID parm) \
+                        { return (unsigned)((FANCONTROL *)parm)->WorkThread(); }
 
 		int WorkThread();
 
@@ -223,7 +225,7 @@ class FANCONTROL
 		BOOL IsMinimized(void);
 		void CurrentDateTimeLocalized(char *result, size_t sizeof_result);
 		void CurrentTimeLocalized(char *result, size_t sizeof_result);
-		HANDLE CreateThread(int (_stdcall *fnct)(ULONG), ULONG p);
+		HANDLE CreateThread(unsigned (__stdcall *fnct)(LPVOID), LPVOID p);
 
 
 		// portio.cpp
