@@ -275,6 +275,21 @@ jobs:
       - name: Markdown link check
         run: python3 scripts/check_links.py
 
+      - name: The portable steps of this workflow still work
+        # ci/ci.yml is a program that nothing compiles and nothing runs until
+        # GitHub does, so an edit to it is invisible until CI is red, on a
+        # runner, in a job that took four minutes to reach the broken line. This
+        # executes the POSIX steps of this file locally.
+        #
+        # It has already paid for itself: it found that the FAKE= selection in
+        # the sanitizer jobs was wrong for one suite, and -- while being written
+        # -- three classification bugs of its own, each of which had quietly
+        # reduced how much was being checked.
+        #
+        # Windows steps are named and skipped, never silently dropped, so a step
+        # cannot be excluded by being misclassified.
+        run: python3 scripts/check_ci_steps.py
+
       - name: No build artifacts tracked
         run: |
           set -eu
