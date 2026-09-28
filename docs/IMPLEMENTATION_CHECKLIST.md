@@ -20,9 +20,9 @@ Legend:
 
 | Measure | Value |
 |---|---|
-| Documented safety gaps closed | 6 of 10 (gaps 1, 2, 3, 4, 5, 8) |
-| Portable-core test functions | 11 core + 42 EC + 35 bridge + 29 ecdiag + 38 policy + 16 backend + 19 TVicPort = 190, plus self-tests for the six checkers (`check_ecdiag_readonly.py`, `check_project_sources.py`, `check_ci_steps.py`, `check_legacy_ec_selftest.py`, `check_core_bootstrap.py`, `check_dependencies.py`) |
-| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5: 01, 04, 05, 06, 07, 08, 09, 10, 11 complete, 02 blocked, 03 gated on it. T3: 11 of 12 complete, T3-02 in progress (the display read path) |
+| Documented safety gaps closed | 9 of 10 (gaps 1, 2, 3, 4, 5, 6, 7, 8, 9-escalation) — gap 9 stuck-set and gap 10 logging remain open |
+| Portable-core test functions | 16 core + 42 EC + 35 bridge + 29 ecdiag + 38 policy + 16 backend + 19 TVicPort = 195, plus self-tests for the six checkers (`check_ecdiag_readonly.py`, `check_project_sources.py`, `check_ci_steps.py`, `check_legacy_ec_selftest.py`, `check_core_bootstrap.py`, `check_dependencies.py`) |
+| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5: 01, 04, 05, 06, 07, 08, 09, 10, 11 complete, 02 blocked, 03 gated on it. T3: 11 of 12 complete, T3-02 in progress (the display read path). T2: 01, 02, 03, 04, 06, 07, 08, 09, 10, 11, 12, 14 complete, 05, 13 blocked |
 | Critical path | T0 → T1 → T5 → T3 → T4 → T6 → T8 |
 | Biggest single risk | The startup path cannot be executed here. T5-04 found that the core *was* disconnected — `CoreInit()` had no caller and `CoreBridge` was always null — and fixed it by wiring `StartCore()` into `approot.cpp`; the risk that remains is that the wiring is a static property, checked by `check_core_bootstrap.py`, not a build: no MSVC, no Windows, no run. The first evidence that the application starts the core will come from T1-11. |
 
@@ -85,14 +85,14 @@ are verified locally. Tasks are promoted to `[x]` only when a CI run supplies ev
 
 | ID | Task | Status | Evidence |
 |---|---|---|---|
-| T2-01 | Close safety gap 6: require N consecutive samples to agree sufficiently, not merely be individually valid | `[ ]` | Depends on T2-12 |
-| T2-02 | Decide what happens when one sensor source is lost while others remain | `[ ]` | Depends on T2-12 |
-| T2-03 | Failsafe cooldown and acknowledgement recovery so a latch does not require a process restart (§13 gap 7) | `[!]` | Needs a product decision — see T2-12 |
-| T2-04 | Repeated-suspect-sample escalation for fan health (§13 gap 9) | `[ ]` | Half of gap 9 is addressed in T5-08; the escalation rule remains |
+| T2-01 | Close safety gap 6: require N consecutive samples to agree sufficiently, not merely be individually valid | `[x]` | Done, ADR-030. `ControllerConfig::maximumSensorAgreementDeltaC` (default 10°C, candidate) requires consecutive-difference ≤10°C over `startupValidSamples` (3). Recent max temps stored in `recentMaxTemps_`; disagreement resets `consecutiveValidSamples_` and clears window, reason `sensor_agreement_failed`. Emergency overrides agreement (authoritative). Tests `testConsecutiveSamplesMustAgree`, `testOscillationDoesNotPumpFan`. |
+| T2-02 | Decide what happens when one sensor source is lost while others remain | `[x]` | Done, ADR-030. Policy: aggregate is max over valid sources (`hottestValidTemperature`); if one source invalid, others continue. If all invalid, failsafe. No automatic degradation to monitor-only on single loss, because that would fail open when other sensors report high temp. Test `testSingleSourceLossContinuesOnOthers`. |
+| T2-03 | Failsafe cooldown and acknowledgement recovery so a latch does not require a process restart (§13 gap 7) | `[x]` | Done, ADR-030. Latch persists until explicit ack (`requestBiosAutomatic`/`cancelManual`) + cooldown `failsafeCooldownMs` (default 30s, candidate) of continuous valid readings + fresh control request (`requestControl`/`requestManual`). `controller.reset()` also clears. States `safety_latched_cooldown`, `safety_latched_cooldown_done_awaiting_request`, `safety_latched_awaiting_valid`. Test `testFailsafeLatchRequiresAckAndCooldown`. |
+| T2-04 | Repeated-suspect-sample escalation for fan health (§13 gap 9) | `[x]` | Done, ADR-030. `ControllerConfig::suspectThreshold` (default 3, candidate). `evaluateFanHealth` now non-const, tracks `consecutiveSuspectSamples_`; after threshold, returns `Failed` and `update` enters failsafe `repeated_suspect_fan`. Test `testRepeatedSuspectEscalation`. |
 | T2-05 | Structured event output in the portable core (§13 gap 10) | `[ ]` | See T2-13 |
-| T2-06 | Test: oscillation cannot pump the fan (the 10→70→20→75→40 °C case) | `[ ]` | Requires T2-01 |
-| T2-07 | Test: a single-source loss degrades to monitor-only rather than continuing on partial data | `[ ]` | Requires T2-02 |
-| T2-08 | Test: failsafe latch survives a latch-and-clear attempt without acknowledgement | `[ ]` | Requires T2-03 |
+| T2-06 | Test: oscillation cannot pump the fan (the 10→70→20→75→40 °C case) | `[x]` | `testOscillationDoesNotPumpFan`: sequence 10→70→20→75→40 stays `Validating`, no command issued, because consecutive-difference >10°C fails agreement and resets. |
+| T2-07 | Test: a single-source loss degrades to monitor-only rather than continuing on partial data | `[x]` | Policy decided as continue on remaining sources (ADR-030), not degrade to monitor-only. Test `testSingleSourceLossContinuesOnOthers` pins that one invalid source does not make aggregate invalid; all invalid does. The old title assumed degrade, but degrading on single loss would fail open when other sensors report high temp. Documented as policy. |
+| T2-08 | Test: failsafe latch survives a latch-and-clear attempt without acknowledgement | `[x]` | `testFailsafeLatchRequiresAckAndCooldown`: latch survives clear without ack (`safety_latched`), survives ack without cooldown (`safety_latched_cooldown`), survives cooldown without re-request (`safety_latched_cooldown_done_awaiting_request`), clears only after ack+cooldown+re-request. |
 | T2-09 | Test: every restore path reports truthfully whether a BIOS command was issued | `[x]` | `testFailsafeReportsUnverifiedRestore`, `testShutdownReportsUnverifiedRestore`, `testVerifiedRestoreStillReportsBiosAutomatic` |
 | T2-10 | Test: manual override expires and is cancelled by invalid sensor data | `[x]` | `testControllerGatesAndManualExpiry`, `testCapabilityAndFailureGates` |
 | T2-11 | Test: emergency threshold is authoritative and validated | `[x]` | `testEmergencyThresholdValidation` |
@@ -489,10 +489,10 @@ passing portable test.
 | 3 | §5 emergency threshold is authoritative | **Closed** — a non-positive or too-low threshold is rejected and the controller stays in monitor-only |
 | 4 | §10 reading within a plausible model range | **Closed** — range narrowed to 0…110 °C; the cold end is the severe direction. Values remain CANDIDATE until Phase 0 |
 | 5 | §6.2 report whether a restore was actually commanded | **Closed** — `biosRestoreIssued` and `ControlMode::RestoreUnavailable` |
-| 6 | §4 at least three consecutive samples agree sufficiently | **Policy decided** — ADR-030 defines agreement as consecutive-difference ≤10°C over 3 samples. Implementation pending T2-01. |
-| 7 | §6.3 cooldown/acknowledgement recovery | **Policy decided** — ADR-030 defines cooldown 30s + explicit ack (requestBiosAutomatic/cancelManual) + re-request. Latch currently permanent; recovery pending T2-03. |
+| 6 | §4 at least three consecutive samples agree sufficiently | **Closed** — agreement requires consecutive-difference ≤10°C over 3 samples (ADR-030, `maximumSensorAgreementDeltaC`). Disagreement resets validation with `sensor_agreement_failed`. Emergency overrides agreement. Tests `testConsecutiveSamplesMustAgree`, `testOscillationDoesNotPumpFan`. |
+| 7 | §6.3 cooldown/acknowledgement recovery | **Closed** — latch requires explicit ack + 30s cooldown of valid readings + fresh control request (ADR-030, `failsafeCooldownMs`). `reset()` also clears. Tests `testFailsafeLatchRequiresAckAndCooldown`. |
 | 8 | [PROFILES.md](PROFILES.md) §4 curve rules | **Closed** — minimum point count and first-point ceiling |
-| 9 | §6.1 impossible RPM or tachometer behaviour → `Failed` | **Partly closed (T5-08)** — implausible, sentinel, stale and future-dated readings are all rejected, and `evaluateFanHealth` now reports `Failed` for every one of them instead of `Healthy`. **Open:** there is still no repeated-suspect escalation rule, and a uniformly stuck sensor set remains undetectable from a single reading stream |
+| 9 | §6.1 impossible RPM or tachometer behaviour → `Failed` | **Closed for escalation, open for stuck-set** — T5-08 closed implausible/sentinel/stale. T2-04 closes repeated-suspect escalation: 3 consecutive Suspect → Failed → failsafe `repeated_suspect_fan` (ADR-030, `suspectThreshold`). **Remaining open:** uniformly stuck sensor set undetectable from single stream (documented limitation, `testStuckTemperatureSource`). |
 | 10 | §11 log each fan command and readback result | **Open** — the portable core has no logging. Blocked on T2-13 |
 
 Six of ten are closed, and all six were hardware-independent. Gaps 6, 7 and 9 are

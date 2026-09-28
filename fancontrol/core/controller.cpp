@@ -1,4 +1,4 @@
-﻿#include "controller.h"
+#include "controller.h"
 
 #include "sensor_validation.h"
 
@@ -87,6 +87,11 @@ void Controller::reset() noexcept
     controlRequested_ = false;
     latchedCommand_ = FanCommand::none();
     lastCommand_ = FanCommand::none();
+    recentMaxTemps_.clear();
+    failsafeAcked_ = false;
+    failsafeAckTimeMs_ = 0;
+    failsafeCooldownStartMs_ = 0;
+    consecutiveSuspectSamples_ = 0;
 }
 
 ControllerOutput Controller::makeBaseOutput(
@@ -121,6 +126,12 @@ void Controller::enterFailsafe(
     manualLevel_ = -1;
     manualExpiresAtMs_ = 0;
     safetyLatched_ = true;
+    failsafeAcked_ = false;
+    failsafeAckTimeMs_ = 0;
+    failsafeCooldownStartMs_ = 0;
+    consecutiveValidSamples_ = 0;
+    recentMaxTemps_.clear();
+    consecutiveSuspectSamples_ = 0;
     latchedCommand_ = input.capabilities.restoreAvailable
         ? FanCommand::biosAutomatic()
         : FanCommand::none();
@@ -139,13 +150,15 @@ void Controller::enterFailsafe(
 
 FanHealth Controller::evaluateFanHealth(
     const ControllerInput& input,
-    const FanCommand& command) const
+    const FanCommand& command)
 {
     if (!config_.rpmSupported) {
+        consecutiveSuspectSamples_ = 0;
         return FanHealth::Unsupported;
     }
 
     if (!input.hasFanRpm || !input.rpmObservationElapsed) {
+        // No observation yet, do not count as suspect.
         return FanHealth::Unknown;
     }
 
@@ -161,13 +174,19 @@ FanHealth Controller::evaluateFanHealth(
         if (rpm.validity == SensorValidity::Missing) {
             return FanHealth::Unknown;
         }
+        consecutiveSuspectSamples_ = 0;
         return FanHealth::Failed;
     }
 
     if (command.kind == CommandKind::Level && command.level > 0 && rpm.rpm == 0) {
+        ++consecutiveSuspectSamples_;
+        if (consecutiveSuspectSamples_ >= config_.suspectThreshold) {
+            return FanHealth::Failed;
+        }
         return FanHealth::Suspect;
     }
 
+    consecutiveSuspectSamples_ = 0;
     return FanHealth::Healthy;
 }
 
@@ -252,23 +271,115 @@ ControllerOutput Controller::update(const ControllerInput& input)
     }
 
     if (safetyLatched_) {
-        output.safetyState = state_;
-        output.manualOverrideActive = false;
-        output.manualExpiresAtMs = 0;
-        output.controlMode = latchedCommand_.kind == CommandKind::BiosAutomatic
-            ? ControlMode::BiosAutomatic
-            : ControlMode::MonitorOnly;
-        output.reasonCode = input.requestBiosAutomatic || input.cancelManual
-            ? "safety_latched_bios"
-            : "safety_latched";
-        const FanCommand command = (input.requestBiosAutomatic || input.cancelManual) &&
-                                   input.capabilities.restoreAvailable
-            ? FanCommand::biosAutomatic()
-            : latchedCommand_;
-        setCommand(output, command);
-        output.fanHealth = evaluateFanHealth(input, output.command);
-        lastCommand_ = output.command;
-        return output;
+        // T2-03 / ADR-030: failsafe recovery requires explicit ack + cooldown + re-request.
+        const bool ack = input.requestBiosAutomatic || input.cancelManual;
+        if (ack && !failsafeAcked_) {
+            failsafeAcked_ = true;
+            failsafeAckTimeMs_ = input.nowMs;
+            failsafeCooldownStartMs_ = 0;
+        }
+
+        if (failsafeAcked_) {
+            if (temperature.valid) {
+                if (failsafeCooldownStartMs_ == 0) {
+                    failsafeCooldownStartMs_ = input.nowMs;
+                }
+                const bool cooldownDone = (input.nowMs >= failsafeCooldownStartMs_) &&
+                    (input.nowMs - failsafeCooldownStartMs_ >= config_.failsafeCooldownMs);
+                if (cooldownDone) {
+                    if (input.requestControl || input.requestManual) {
+                        // Clear latch and start fresh validation.
+                        safetyLatched_ = false;
+                        failsafeAcked_ = false;
+                        failsafeAckTimeMs_ = 0;
+                        failsafeCooldownStartMs_ = 0;
+                        consecutiveValidSamples_ = 0;
+                        recentMaxTemps_.clear();
+                        consecutiveSuspectSamples_ = 0;
+                        state_ = SafetyState::Validating;
+                        // Fall through to normal handling.
+                    } else {
+                        output.safetyState = state_;
+                        output.manualOverrideActive = false;
+                        output.manualExpiresAtMs = 0;
+                        output.controlMode = ControlMode::BiosAutomatic;
+                        output.reasonCode = "safety_latched_cooldown_done_awaiting_request";
+                        const FanCommand cmd = input.capabilities.restoreAvailable
+                            ? FanCommand::biosAutomatic()
+                            : FanCommand::none();
+                        setCommand(output, cmd);
+                        if (latchedCommand_.kind == CommandKind::None) {
+                            output.commandMayBeIssued = false;
+                        }
+                        output.fanHealth = evaluateFanHealth(input, output.command);
+                        lastCommand_ = output.command;
+                        return output;
+                    }
+                } else {
+                    output.safetyState = state_;
+                    output.manualOverrideActive = false;
+                    output.manualExpiresAtMs = 0;
+                    output.controlMode = latchedCommand_.kind == CommandKind::BiosAutomatic
+                        ? ControlMode::BiosAutomatic
+                        : ControlMode::MonitorOnly;
+                    output.reasonCode = "safety_latched_cooldown";
+                    const FanCommand command = input.capabilities.restoreAvailable
+                        ? FanCommand::biosAutomatic()
+                        : latchedCommand_;
+                    setCommand(output, command);
+                    if (latchedCommand_.kind == CommandKind::None) {
+                        output.commandMayBeIssued = false;
+                    }
+                    output.fanHealth = evaluateFanHealth(input, output.command);
+                    lastCommand_ = output.command;
+                    return output;
+                }
+            } else {
+                // Acked but no valid temp yet, reset cooldown start.
+                failsafeCooldownStartMs_ = 0;
+                output.safetyState = state_;
+                output.manualOverrideActive = false;
+                output.manualExpiresAtMs = 0;
+                output.controlMode = latchedCommand_.kind == CommandKind::BiosAutomatic
+                    ? ControlMode::BiosAutomatic
+                    : ControlMode::MonitorOnly;
+                output.reasonCode = "safety_latched_awaiting_valid";
+                const FanCommand command = input.capabilities.restoreAvailable
+                    ? FanCommand::biosAutomatic()
+                    : latchedCommand_;
+                setCommand(output, command);
+                if (latchedCommand_.kind == CommandKind::None) {
+                    output.commandMayBeIssued = false;
+                }
+                output.fanHealth = evaluateFanHealth(input, output.command);
+                lastCommand_ = output.command;
+                return output;
+            }
+        }
+
+        // No ack yet, or ack handling fell through after clearing latch? If still latched, report.
+        if (safetyLatched_) {
+            output.safetyState = state_;
+            output.manualOverrideActive = false;
+            output.manualExpiresAtMs = 0;
+            output.controlMode = latchedCommand_.kind == CommandKind::BiosAutomatic
+                ? ControlMode::BiosAutomatic
+                : ControlMode::MonitorOnly;
+            output.reasonCode = ack
+                ? "safety_latched_bios"
+                : "safety_latched";
+            const FanCommand command = ack && input.capabilities.restoreAvailable
+                ? FanCommand::biosAutomatic()
+                : latchedCommand_;
+            setCommand(output, command);
+            if (latchedCommand_.kind == CommandKind::None) {
+                output.commandMayBeIssued = false;
+            }
+            output.fanHealth = evaluateFanHealth(input, output.command);
+            lastCommand_ = output.command;
+            return output;
+        }
+        // Latch cleared, continue to normal handling below.
     }
 
     if (!controlRequested_) {
@@ -293,6 +404,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
 
     if (!temperature.valid) {
         consecutiveValidSamples_ = 0;
+        recentMaxTemps_.clear();
         if (wasControlling && input.capabilities.restoreAvailable) {
             enterFailsafe(output, input, "temperature_invalid");
         } else {
@@ -310,18 +422,6 @@ ControllerOutput Controller::update(const ControllerInput& input)
         return output;
     }
 
-    ++consecutiveValidSamples_;
-    if (consecutiveValidSamples_ < config_.startupValidSamples) {
-        state_ = SafetyState::Validating;
-        output.safetyState = state_;
-        output.controlMode = ControlMode::MonitorOnly;
-        output.reasonCode = "startup_validation";
-        setCommand(output, FanCommand::none());
-        output.fanHealth = evaluateFanHealth(input, output.command);
-        lastCommand_ = output.command;
-        return output;
-    }
-
     const bool emergency = config_.emergencyTemperatureC > 0 &&
                            temperature.valueC >= config_.emergencyTemperatureC;
     if (emergency) {
@@ -334,8 +434,57 @@ ControllerOutput Controller::update(const ControllerInput& input)
         output.reasonCode = "emergency_temperature";
         const CurveDecision decision = curve_.update(temperature.valueC, input.nowMs, true);
         safetyLatched_ = true;
+        failsafeAcked_ = false;
+        failsafeAckTimeMs_ = 0;
+        failsafeCooldownStartMs_ = 0;
+        consecutiveValidSamples_ = 0;
+        recentMaxTemps_.clear();
         latchedCommand_ = decision.command;
         setCommand(output, decision.command);
+        output.fanHealth = evaluateFanHealth(input, output.command);
+        lastCommand_ = output.command;
+        return output;
+    }
+
+    // T2-01 / ADR-030: sensor agreement - consecutive valid samples must agree.
+    recentMaxTemps_.push_back(temperature.valueC);
+    if (recentMaxTemps_.size() > config_.startupValidSamples) {
+        recentMaxTemps_.erase(recentMaxTemps_.begin());
+    }
+    if (recentMaxTemps_.size() == config_.startupValidSamples) {
+        bool agreement = true;
+        for (std::size_t i = 1; i < recentMaxTemps_.size(); ++i) {
+            const int diff = recentMaxTemps_[i] - recentMaxTemps_[i - 1];
+            const int absDiff = diff >= 0 ? diff : -diff;
+            if (absDiff > config_.maximumSensorAgreementDeltaC) {
+                agreement = false;
+                break;
+            }
+        }
+        if (!agreement) {
+            consecutiveValidSamples_ = 0;
+            recentMaxTemps_.clear();
+            manualActive_ = false;
+            manualLevel_ = -1;
+            manualExpiresAtMs_ = 0;
+            state_ = SafetyState::Validating;
+            output.safetyState = state_;
+            output.controlMode = ControlMode::MonitorOnly;
+            output.reasonCode = "sensor_agreement_failed";
+            setCommand(output, FanCommand::none());
+            output.fanHealth = evaluateFanHealth(input, output.command);
+            lastCommand_ = output.command;
+            return output;
+        }
+    }
+
+    ++consecutiveValidSamples_;
+    if (consecutiveValidSamples_ < config_.startupValidSamples) {
+        state_ = SafetyState::Validating;
+        output.safetyState = state_;
+        output.controlMode = ControlMode::MonitorOnly;
+        output.reasonCode = "startup_validation";
+        setCommand(output, FanCommand::none());
         output.fanHealth = evaluateFanHealth(input, output.command);
         lastCommand_ = output.command;
         return output;
@@ -387,6 +536,12 @@ ControllerOutput Controller::update(const ControllerInput& input)
     }
 
     output.fanHealth = evaluateFanHealth(input, output.command);
+    if (output.fanHealth == FanHealth::Failed && consecutiveSuspectSamples_ >= config_.suspectThreshold) {
+        enterFailsafe(output, input, "repeated_suspect_fan");
+        output.fanHealth = FanHealth::Failed;
+        lastCommand_ = output.command;
+        return output;
+    }
     lastCommand_ = output.command;
     return output;
 }
