@@ -50,8 +50,13 @@ that a driver loads, that a machine was tested, or that a version matches.
 
 The legacy application calls `OpenTVicPort`, `ReadPort` and `WritePort`
 (`fancontrol/approot.cpp`, `fancontrol/fanstuff.cpp`, `fancontrol/portio.cpp`).
-The modern core does not: it reaches the ports through `core/io_backend.h`, and
-the TVicPort adapter is T5-01.
+The modern core does not: it reaches the ports through `core/io_backend.h`.
+
+Since T5-01 there is one adapter over this library,
+`fancontrol/core/tvicport_backend.{h,cpp}`, and one file that names the DLL's
+entry points, `fancontrol/tvicport_dll.cpp`. The adapter is built and tested on
+Linux against a fake DLL; it has never been compiled by MSVC and never spoken to
+the driver, so it adds no evidence to any field below.
 
 ### 4.1 The ten fields
 
@@ -136,6 +141,7 @@ it is not a candidate for the modern backend.
 | Loads under Secure Boot / HVCI, and whether the blocklist refuses it | T4-06, with T5-02's result for comparison |
 | Uninstall and rollback | Phase 0/Phase 1, [DRIVER_BACKENDS.md](DRIVER_BACKENDS.md) §5 |
 | Whether the 2005 32-bit driver shares the 5.2.1.0 IOCTL weakness | Not scheduled; if the baseline is ever used on a machine, this moves |
+| Whether `tvicport_dll.cpp` compiles against the vendored header under MSVC | T1-01 |
 
 ## 5. PawnIO (candidate, not adopted)
 

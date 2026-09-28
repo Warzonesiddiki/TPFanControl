@@ -20,6 +20,7 @@
 #include "fancontrol.h"
 #include "tools.h"
 #include "TVicPort.h"
+#include "tvicport_dll.h"
 
 // T3-11. The fan-selector register. It is named here because the register map
 // records it, and read-only code may still refer to it, but this build must
@@ -403,8 +404,6 @@ FANCONTROL::CoreInit()
 	if (!::IsDriverOpened())
 		return false;		// monitor-only: nothing is opened, nothing is written
 
-	tpfancontrol::core::LegacyPortPrimitives primitives;
-
 	// These are the driver's own port primitives - TVicPort's ReadPort and
 	// WritePort - and NOT FANCONTROL::ReadByteFromEC / WriteByteToEC.
 	//
@@ -417,18 +416,15 @@ FANCONTROL::CoreInit()
 	//
 	// There is now one implementation of the protocol, in EcBus, and this is the
 	// layer beneath it. See ADR-023.
-	primitives.readPort = [](std::uint16_t port, std::uint8_t& out) -> bool {
-		// ReadPort returns UCHAR, which is unsigned on this platform, so there is
-		// no signed-char round trip here. The core does the narrowing and widening
-		// explicitly; this layer only moves bytes.
-		out = ::ReadPort(port);
-		return true;
-		};
-
-	primitives.writePort = [](std::uint16_t port, std::uint8_t value) -> bool {
-		::WritePort(port, value);
-		return true;
-	};
+	//
+	// T5-01: the mapping from the DLL's entry points onto this port layer used
+	// to be written out again here, as two lambdas. It is now the same function
+	// the TVicPort adapter uses (makeTvicPortPrimitives), so the DLL's functions
+	// are described in one place. The driver handle itself stays with
+	// approot.cpp: this function opens nothing.
+	const tpfancontrol::core::TvicPortApi api = tpfancontrol::app::makeTvicPortApi();
+	const tpfancontrol::core::LegacyPortPrimitives primitives =
+		tpfancontrol::core::makeTvicPortPrimitives(api);
 
 	CoreBackend.reset(new tpfancontrol::core::LegacyBackend(primitives));
 	CoreBackend->setDriverOpen(true);

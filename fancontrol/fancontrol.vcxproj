@@ -388,6 +388,24 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <AdditionalOptions>/permissive- /EHsc /utf-8</AdditionalOptions>
     </ClCompile>
+    <ClCompile Include="tvicport_dll.cpp">
+      <!-- T5-01: the one place that names the TVicPort DLL's entry points.
+           Its core unit (core\tvicport_backend.cpp) is /W4 /WX; this file
+           is legacy-side glue and follows the legacy warning policy, but it
+           contains no decision - it forwards five calls. -->
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level4</WarningLevel>
+      <AdditionalOptions>/permissive- /EHsc /utf-8</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="core\tvicport_backend.cpp">
+      <!-- T5-01: the TVicPort baseline adapter. /W4 /WX for the same reason
+           as the rest of the core: it decides whether a port call is made,
+           and it is the layer that could silently turn hard access on. -->
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <AdditionalOptions>/permissive- /EHsc /utf-8</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="core\io_backend.cpp">
       <!-- T1-04: new portable code is held to /W4 as errors.
            /utf-8 is safe here because core sources are pure ASCII, so the
@@ -408,6 +426,7 @@
     <ClInclude Include="TaskbarTextIcon.h" />
     <ClInclude Include="tools.h" />
     <ClInclude Include="TVicPort.h" />
+    <ClInclude Include="tvicport_dll.h" />
     <ClInclude Include="winstuff.h" />
     <ClInclude Include="_prec.h" />
     <ClInclude Include="core\core_types.h" />
@@ -415,6 +434,7 @@
     <ClInclude Include="core\fan_curve.h" />
     <ClInclude Include="core\controller.h" />
     <ClInclude Include="core\io_backend.h" />
+    <ClInclude Include="core\tvicport_backend.h" />
     <ClInclude Include="core\legacy_policy.h" />
     <ClInclude Include="core\legacy_backend.h" />
     <ClInclude Include="core\ec_access.h" />

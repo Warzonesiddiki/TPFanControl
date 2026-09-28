@@ -22,7 +22,7 @@ Legend:
 |---|---|
 | Documented safety gaps closed | 6 of 10 (gaps 1, 2, 3, 4, 5, 8) |
 | Portable-core test functions | 11 core + 42 EC + 31 bridge + 29 ecdiag + 20 policy + 16 backend = 149, plus a self-test for the three checkers that could otherwise stop matching silently (`check_ecdiag_readonly.py`, `check_project_sources.py`, `check_ci_steps.py`) |
-| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5: 05, 06, 07, 08, 09, 10, 11 complete, 04 in progress, 02 blocked, 01/03 not started |
+| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5: 01, 05, 06, 07, 08, 09, 10, 11 complete, 04 in progress, 02 blocked, 03 gated on it |
 | Critical path | T0 → T1 → T5 → T3 → T4 → T6 → T8 |
 | Biggest single risk | The portable core is not connected to the application. It is compiled by the project and tested, but no legacy file includes a core header, so the safety state machine is dead code that can drift from shipped behaviour indefinitely without any signal. |
 
@@ -120,8 +120,8 @@ are verified locally. Tasks are promoted to `[x]` only when a CI run supplies ev
 | T3-12 | Record the integration in an ADR | `[x]` | Done. ADR-021 (refusing to address an individual fan), ADR-022 (superseded) and ADR-023 (the register-write barrier belongs to EcBus; the backend is a port backend).
 
 **T3 evidence note — what has and has not been shown.** Everything marked done in
-this table is verified by a runnable artifact in this repository: 149 tests across
-six suites, passing plain, under `-O2 -DNDEBUG`, under ASan+UBSan and under TSan,
+this table is verified by a runnable artifact in this repository: 168 tests across
+seven suites, passing plain, under `-O2 -DNDEBUG`, under ASan+UBSan and under TSan,
 plus the static checks in `scripts/`. None of that is a Windows build. The application has
 never been compiled here, because there is no Windows machine and no MSVC. The
 core call sequence `SetFan` makes was typechecked by a separate translation unit
@@ -146,7 +146,7 @@ would imply a capability the project does not have.
 | T4-03 | Record CPU, graphics, BIOS version and Windows build | `[!]` | Needs the target machine |
 | T4-04 | Record Secure Boot and HVCI state | `[!]` | Needs the target machine |
 | T4-05 | Record AC/battery baseline temperatures and RPM | `[!]` | Needs the target machine |
-| T4-06 | Determine whether TVicPort loads under HVCI | `[!]` | Depends on T5-02 |
+| T4-06 | Determine whether TVicPort loads under HVCI | `[!]` | Depends on T5-02, and on a Windows machine. T5-01 now provides the instrument: the adapter reports whether the driver opened, what it said about hard access, and whether the setting was changed — the three facts this task has to record. No substitution for the machine itself. |
 | T4-07 | Collect read-only EC evidence | `[!]` | Never write to discover; see ADR-004 |
 | T4-08 | Classify candidate EC ports | `[!]` | [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §3 |
 | T4-09 | Classify the fan-control register | `[!]` | `0x31` is never a valid answer for T14 |
@@ -162,7 +162,7 @@ would imply a capability the project does not have.
 
 | ID | Task | Status | Evidence |
 |---|---|---|---|
-| T5-01 | TVicPort adapter implementing `IIoBackend`, for baseline comparison | `[ ]` | Not started. Windows-only; the interface it must satisfy is now covered by tests. |
+| T5-01 | TVicPort adapter implementing `IIoBackend`, for baseline comparison | `[x]` | `core/tvicport_backend.{h,cpp}` (the adapter, testable everywhere), `tvicport_dll.{h,cpp}` (the only file that names the vendor DLL's entry points), `tests/tvicport_backend_tests.cpp` (**19 tests**, against a fake DLL that counts calls to all seven entry points). It opens the driver only when `attach()` is called and closes only what it opened; a driver closed behind its back stops every port call; ports and all 256 byte values arrive unchanged; every call is traceable. It forwards port values rather than filtering them — refusing `0x31`/`0x2F` is `EcBus`'s job (ADR-021, ADR-023) — and a test asserts that, so the layering cannot drift back. **The one behaviour it deliberately does not reproduce:** `approot.cpp` calls `SetHardAccess(true)` unconditionally and ignores the result; the adapter requests hard access only when the caller asks, and records the driver's answer, whether it asked, whether the setting changed, and who opened the driver (ADR-026). The mapping from the DLL onto the port layer now exists once — `makeTvicPortPrimitives`, used by both the adapter and `fanstuff.cpp`, which previously wrote the same two lambdas by hand. **Not verified:** no MSVC, no Windows, no driver, no hardware. The adapter has never spoken to a running TVicPort, and `tvicport_dll.cpp` has never been compiled. T1-01 and then T4-06 are where that changes. |
 | T5-02 | PawnIO feasibility spike on a disposable Windows install ([DRIVER_BACKENDS.md](DRIVER_BACKENDS.md) §4) | `[!]` | Genuinely blocked: needs a disposable Windows install, a driver download, and an HVCI-capable machine. No substitute evidence is acceptable. |
 | T5-03 | Record backend signature and HVCI result | `[ ]` | Blocked behind T5-02. The matrix location exists and is empty. |
 | T5-04 | Monitor-only behavior when the backend is absent | `[-]` | The core already refuses to command without a ready backend (`testCapabilityAndFailureGates`, plus `testBackendNotReadyRefusesBeforeTouchingHardware`). The application-level path is wired in T3. |
@@ -250,15 +250,15 @@ outcome would have made all four of those look like passing tests.
 Run locally on Linux with g++ (no MSBuild, Visual Studio or Windows in this
 environment). Every cell below was executed, not inferred:
 
-| Configuration | `core_tests` | `ec_protocol_tests` | `app_bridge_tests` | `ecdiag_tests` | `legacy_policy_tests` | `legacy_backend_tests` | Total |
-|---|---|---|---|---|---|---|---|
-| `-Wall -Wextra -Werror -pedantic` | 11 | 42 | 31 | 29 | 20 | 16 | **149** |
-| `-O2 -DNDEBUG` | 11 | 42 | 31 | 29 | 20 | 16 | **149** |
-| `-fsanitize=address,undefined` | 11 | 42 | 31 | 29 | 20 | 16 | **149** |
-| `-fsanitize=thread` | 11 | 42 | 31 | 29 | 20 | 16 | **149** |
+| Configuration | `core_tests` | `ec_protocol_tests` | `app_bridge_tests` | `ecdiag_tests` | `legacy_policy_tests` | `legacy_backend_tests` | `tvicport_backend_tests` | Total |
+|---|---|---|---|---|---|---|---|---|
+| `-Wall -Wextra -Werror -pedantic` | 11 | 42 | 31 | 29 | 20 | 16 | 19 | **168** |
+| `-O2 -DNDEBUG` | 11 | 42 | 31 | 29 | 20 | 16 | 19 | **168** |
+| `-fsanitize=address,undefined` | 11 | 42 | 31 | 29 | 20 | 16 | 19 | **168** |
+| `-fsanitize=thread` | 11 | 42 | 31 | 29 | 20 | 16 | 19 | **168** |
 
 `core_tests` reports no count: it is the original suite and was not renumbered
-when the others were added. The other five print their own count and fail if it is
+when the others were added. The other six print their own count and fail if it is
 wrong.
 
 The `-DNDEBUG` row is not redundant. Release defines `NDEBUG`, which compiles
@@ -280,9 +280,9 @@ on a tree that violates it:
 | `check_links.py` | A relative link or anchor in the documentation that does not resolve | run against the previous tree |
 | `check_ci_steps.py` | The portable steps of `ci/ci.yml` no longer working — it executes them locally | caught a suite that stopped linking because its fake source was wrong |
 
-`tests/run_core_tests.sh` builds and runs all six suites, and builds and
+`tests/run_core_tests.sh` builds and runs all seven suites, and builds and
 smoke-tests the `ecdiag` tool, and is the single entry point used by CI. The
-Windows build (eight projects, four configurations, `/W4 /WX`, MSVC `/analyze`)
+Windows build (nine projects, four configurations, `/W4 /WX`, MSVC `/analyze`)
 is **not** verified here — no Windows toolchain exists in this environment — and
 is recorded as awaiting CI evidence rather than as done.
 
@@ -310,6 +310,11 @@ is recorded as awaiting CI evidence rather than as done.
 - The `EcBus` mutex is the portable equivalent of the EC access mutex in
   [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §5 step 1. It does **not** serialise against
   the legacy application's own thread — that is T3-06.
+- **The TVicPort adapter has never met the driver.** It is compiled and tested
+  against a fake DLL on Linux only. Two of its own claims therefore remain open
+  until a Windows machine exists: that `tvicport_dll.cpp` compiles against the
+  vendored header as MSVC reads it, and that the driver's own answers (open,
+  hard access) are what the API documents. T4-06 measures the second.
 - **`ecdiag` has never read a machine.** There is no live backend, so every
   `--backend` name exits 4 and the only runs that exist are `--plan` (no I/O) and
   `--simulate` (an invented table). Its read-only guarantee is structural and is

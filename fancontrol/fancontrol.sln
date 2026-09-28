@@ -13,6 +13,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "app_bridge_tests", "..\test
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "legacy_policy_tests", "..\tests\legacy_policy_tests.vcxproj", "{9B4E7D05-1C68-4A32-8F19-D3E60B2A5C74}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "tvicport_backend_tests", "..\tests\tvicport_backend_tests.vcxproj", "{4C7A2E18-6B93-4F52-9D08-31E5A7C42B60}"
+EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "legacy_backend_tests", "..\tests\legacy_backend_tests.vcxproj", "{3E1F8A42-7B95-4D06-8C33-A2F5E0194B87}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ecdiag_tests", "..\tests\ecdiag_tests.vcxproj", "{543D9F80-27B2-4E26-A3AD-8EDD01303F93}"
@@ -75,6 +77,14 @@ Global
 		{3E1F8A42-7B95-4D06-8C33-A2F5E0194B87}.Debug|x64.Build.0 = Debug|x64
 		{3E1F8A42-7B95-4D06-8C33-A2F5E0194B87}.Release|x64.ActiveCfg = Release|x64
 		{3E1F8A42-7B95-4D06-8C33-A2F5E0194B87}.Release|x64.Build.0 = Release|x64
+		{4C7A2E18-6B93-4F52-9D08-31E5A7C42B60}.Debug|Win32.ActiveCfg = Debug|Win32
+		{4C7A2E18-6B93-4F52-9D08-31E5A7C42B60}.Debug|Win32.Build.0 = Debug|Win32
+		{4C7A2E18-6B93-4F52-9D08-31E5A7C42B60}.Release|Win32.ActiveCfg = Release|Win32
+		{4C7A2E18-6B93-4F52-9D08-31E5A7C42B60}.Release|Win32.Build.0 = Release|Win32
+		{4C7A2E18-6B93-4F52-9D08-31E5A7C42B60}.Debug|x64.ActiveCfg = Debug|x64
+		{4C7A2E18-6B93-4F52-9D08-31E5A7C42B60}.Debug|x64.Build.0 = Debug|x64
+		{4C7A2E18-6B93-4F52-9D08-31E5A7C42B60}.Release|x64.ActiveCfg = Release|x64
+		{4C7A2E18-6B93-4F52-9D08-31E5A7C42B60}.Release|x64.Build.0 = Release|x64
 		{543D9F80-27B2-4E26-A3AD-8EDD01303F93}.Debug|Win32.ActiveCfg = Debug|Win32
 		{543D9F80-27B2-4E26-A3AD-8EDD01303F93}.Debug|Win32.Build.0 = Debug|Win32
 		{543D9F80-27B2-4E26-A3AD-8EDD01303F93}.Release|Win32.ActiveCfg = Release|Win32

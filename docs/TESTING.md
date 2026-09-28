@@ -57,8 +57,8 @@ Prove that every failure path:
 ## 3. Portable-core and feature tests
 
 The hardware-independent core lives under `fancontrol/core/` and is exercised by
-**six** suites, all hardware-free and all buildable without Windows headers or a
-driver:
+**seven** suites, all hardware-free and all buildable without Windows headers or
+a driver:
 
 | Suite | Source | Tests | Covers |
 |---|---|---:|---|
@@ -68,12 +68,13 @@ driver:
 | `ecdiag_tests` | `tests/ecdiag_tests.cpp` | 29 | the read-only diagnostic: a full run through a real `EcBus` writes no register, the integrity checks catch a reader that does, and the JSON report is accepted by a strict parser |
 | `legacy_policy_tests` | `tests/legacy_policy_tests.cpp` | 20 | the legacy UI's intent translated to a core request; the refusal to address an individual fan; the monitor-only guard; the final-manual refusal |
 | `legacy_backend_tests` | `tests/legacy_backend_tests.cpp` | 16 | the port backend: that port numbers arrive unchanged, that `EcBus` + backend is exactly one transaction, and that register writes are denied by default |
+| `tvicport_backend_tests` | `tests/tvicport_backend_tests.cpp` | 19 | the TVicPort baseline adapter's lifecycle, against a fake DLL: what it opens and closes, and the hard-access switch it does not flip unless asked |
 
 `core_tests` reports no count: it predates the convention and was not renumbered.
-The other five print their own count and fail if it is wrong, so a suite that
+The other six print their own count and fail if it is wrong, so a suite that
 silently ran half its cases fails rather than passing quietly.
 
-All six are built and run by `tests/run_core_tests.sh`, the single entry point
+All seven are built and run by `tests/run_core_tests.sh`, the single entry point
 used by CI on Linux, macOS and Windows. The same script builds the `ecdiag` tool
 itself and exercises its modes and exit codes. On Windows the suites also build as
 `tests/*.vcxproj`, and the tool as `tools/ecdiag/ecdiag.vcxproj`, in all four
@@ -84,6 +85,13 @@ run writes no register. It does that by reading the bus's own write trace and th
 fake's committed-write log rather than by trusting the tool's intent, and the
 structural half of the same guarantee — the tool cannot name a write at all — is
 checked by `scripts/check_ecdiag_readonly.py`. See [ECDIAG.md](ECDIAG.md).
+
+`tvicport_backend_tests` is the suite that runs against a fake *DLL* rather than
+a fake EC: it counts the calls to the seven TVicPort entry points, so "the
+adapter opened the driver once", "it did not call `SetHardAccess`", and "it made
+no port call after the driver was closed under it" are assertions rather than
+claims. It proves nothing about a real driver — see ADR-026 for what is
+deliberately not turned on, and T4-06 for where that is measured.
 
 ### 3.0 What the bridge and policy suites deliberately do not prove
 

@@ -747,3 +747,104 @@ hygiene job instead of passing review.
 recorded (the CVE still applies to file version 5.2.1.0, so a fixed version
 would be required); or T5-02 selects PawnIO and its ten fields are completed; or
 the baseline is dropped entirely and the import library leaves the tree.
+
+## ADR-026 — The TVicPort adapter does not turn on hard access by itself
+
+**Status.** Accepted, T5-01. Amends the behaviour of the legacy application; does not change it.
+
+**Context.** T5-01 asks for a TVicPort adapter implementing `IIoBackend`, so
+the baseline can be compared with a modern backend on the target machine
+(T4-06). Writing it meant reading `fancontrol/approot.cpp` again, and the
+sequence there is:
+
+```cpp
+HardAccess = TestHardAccess();
+SetHardAccess(NewHardAccess);   // NewHardAccess = true, unconditionally
+HardAccess = TestHardAccess();  // and the result is never looked at
+```
+
+TVicPort's hard access is the mode in which the driver performs port I/O even
+when its own probe says the I/O is not safe to perform on that machine. The
+legacy code turns it on every time, before it has any idea what the machine is,
+and then ignores what the driver says about the result. `SetHardAccess` is also
+the only entry point in the vendored library that changes a driver setting
+rather than reading or writing a port.
+
+There is no third option in which this is neutral. Either the adapter copies the
+call - and then a new binary, on an unverified machine, silently changes a
+driver setting, in a code path nobody decided anything in - or it does not, and
+the difference has to be written down somewhere a reviewer will find it.
+
+**Decision 1 — the default is not to ask.**
+
+`TvicPortOptions::requestHardAccess` is false. `attach()` records
+`TestHardAccess()` in a `HardAccessReport`, and calls `SetHardAccess(true)` only
+when the caller set that option. When the driver reports hard access unavailable
+and nothing was asked for, `attach()` still succeeds: reads are attempted, the
+driver's answer is recorded, and the run is a monitor-only run that says so.
+Refusing to attach would be worse, because it would hide the machine's real
+state behind a failure.
+
+**Decision 2 — the decision is recorded, not just taken.**
+
+`HardAccessReport` carries whether the driver reported hard access available,
+whether this adapter asked for it, whether `SetHardAccess` was called, whether
+this adapter opened the driver or found it open, and a message saying which.
+A hardware report that cannot state this cannot claim the baseline ran in the
+same mode as the shipped application, and that comparison is the reason T5-01
+exists.
+
+**Decision 3 — the legacy application keeps its own behaviour, unchanged.**
+
+`approot.cpp` still calls `SetHardAccess(true)`. It is being *measured*, and a
+measurement taken through code that had already been changed is not a
+measurement of the thing the users have. The adapter is the modern path; the
+legacy path is evidence. When a backend is chosen, the legacy path's fate is
+T5-02's successor task and T1/T3's, not this one.
+
+**Alternatives considered.**
+
+- *Copy the legacy call so the two paths behave identically* — rejected. It
+  optimises for comparison and pays with a silent driver-setting change on every
+  machine, made by code that has no way to know whether the setting is
+  appropriate.
+- *Refuse to attach when hard access is unavailable* — rejected. It converts a
+  diagnosable state ("the driver will not do port I/O here") into a failure
+  message, and removes the monitor-only mode that works in exactly that state.
+- *Read the setting back and report it, without offering to change it at all* —
+  rejected as too rigid: a person with the machine in front of them, and a
+  reason, has to be able to ask for it. The option is how they ask, and it is
+  recorded.
+
+**Safety impact.** The change reduces what the software does to a machine: one
+driver setting is no longer changed without a caller asking. No new privileged
+access; no EC writes; no startup behaviour change; nothing loads a driver. The
+adapter cannot make a register-level decision in either direction — it forwards
+port values, including 0x31 and 0x2F, and a test asserts that it does, because
+refusing those is `EcBus`'s job (ADR-021, ADR-023).
+
+**Testing and evidence.** `tests/tvicport_backend_tests.cpp` (19 tests) covers
+the lifecycle against a fake DLL: construction touches nothing, attach is
+idempotent, a failed open is typed and leaves nothing open, an already-open
+driver is neither reopened nor closed, `SetHardAccess` is called zero times
+unless asked for and exactly once with `true` when it is, an available hard
+access is not touched even when the option is set, a driver closed behind the
+adapter's back stops every port call, ports and all 256 byte values arrive
+unchanged, and the trace records every call. Not covered, and not claimed: any
+interaction with a real driver, on real hardware, under any security
+configuration. There is no Windows machine here; T4-06 is where this is measured.
+
+**Consequences.** `scripts/check_ci_steps.py` immediately earned its keep: adding
+the suite to the workflow's sanitizer loop exposed that `run_core_tests.sh`'s
+core-source list was missing `tvicport_backend.cpp`, so the suite could not link
+in the step that runs the real script. The primitive mapping now exists once —
+`makeTvicPortPrimitives`, used by both the adapter and `fanstuff.cpp`, which
+previously wrote the same two lambdas out by hand. The DLL's entry points are
+named in exactly one file, `fancontrol/tvicport_dll.cpp`.
+
+**Revisit conditions.** When T4-06 measures the baseline and the answer is that
+hard access is required on the target machine, that finding is recorded in the
+Phase 0 report and the option is set by the code that constructs the baseline
+run — with the report as its justification. If a future backend makes this
+switch irrelevant, this ADR is superseded rather than deleted, because the
+question will come back with the next vendor library.

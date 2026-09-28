@@ -48,6 +48,25 @@ struct IoResult {
     static IoResult failure(IoErrorCode error, const std::string& message);
 };
 
+// ---------------------------------------------------------------------------
+// One call to the privileged I/O primitive, recorded for evidence.
+//
+// The EC transaction is a sequence of port writes and reads, and a claim like
+// "this cycle wrote nothing" is only checkable if the calls are recorded.
+// Without a trace, the only way to find out what reached the hardware is to
+// read the hardware.
+//
+// It lives here rather than beside one backend because it is a property of the
+// port layer, not of the legacy application: any backend that talks to real
+// ports has to be able to answer "what did you do to the machine?".
+// ---------------------------------------------------------------------------
+struct PortCall {
+    bool isWrite = false;
+    std::uint16_t port = 0;
+    std::uint8_t value = 0;
+    bool ok = false;
+};
+
 // The interface describes privileged I/O only. It intentionally knows nothing
 // about EC offsets, fan levels, profiles, or temperature curves.
 class IIoBackend {

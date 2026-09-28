@@ -41,6 +41,16 @@ Phase 1 should answer these questions instead of assuming the answer:
 
 Record the result in the Phase 0/Phase 1 report. The project must not silently require the user to disable Windows security features.
 
+The adapter that asks those questions from code is
+[`fancontrol/core/tvicport_backend.h`](../fancontrol/core/tvicport_backend.h)
+(T5-01): `attach()` opens the driver if it is not already open, records what
+`TestHardAccess()` says, and requests hard access only when the caller asked for
+it — the legacy application calls `SetHardAccess(true)` unconditionally, and
+reproducing that silently is exactly what ADR-026 refuses. `HardAccessReport`
+carries the three facts this section's questions produce, so the Phase 0 report
+can quote them rather than reconstruct them. It has not been run against a
+driver; see [DEPENDENCIES.md](DEPENDENCIES.md) §4.6 for what is still open.
+
 The artefact in this repository does not answer any of those questions, and it
 does block one of them: the vendored import library is 32-bit (all 51 COFF
 members are `pe-i386`), so an x64 link cannot use it. See

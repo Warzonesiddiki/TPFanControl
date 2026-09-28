@@ -2,8 +2,9 @@ name: CI
 
 # Tasks covered:
 #   T1-08  portable core tests on Linux, macOS and Windows
-#           (all six suites: core_tests, ec_protocol_tests, app_bridge_tests,
-#            ecdiag_tests, legacy_policy_tests and legacy_backend_tests)
+#           (all seven suites: core_tests, ec_protocol_tests, app_bridge_tests,
+#            ecdiag_tests, legacy_policy_tests, legacy_backend_tests and
+#            tvicport_backend_tests)
 #           plus the ecdiag tool itself, built and smoke-tested
 #   T5-11  the dependency record: hashes match, ten fields per dependency,
 #           every tracked binary artefact recorded
@@ -56,7 +57,8 @@ jobs:
           mkdir -p "$BUILD_DIR"
           CXX="${CXX:-g++}"
           for suite in core_tests ec_protocol_tests app_bridge_tests \
-                       ecdiag_tests legacy_policy_tests legacy_backend_tests; do
+                       ecdiag_tests legacy_policy_tests legacy_backend_tests \
+                       tvicport_backend_tests; do
             # core_tests uses the fake backend; the EC suites use the fake EC.
             # legacy_policy_tests supplies its own doubles inline and needs no
             # fake. legacy_backend_tests does need fake_ec.cpp - for FakeClock,
@@ -68,7 +70,7 @@ jobs:
             # have failed four minutes into a CI run.
             case "$suite" in
               core_tests)          FAKE=tests/fake_backend.cpp ;;
-              legacy_policy_tests) FAKE=/dev/null ;;
+              legacy_policy_tests | tvicport_backend_tests) FAKE=/dev/null ;;
               *)                   FAKE=tests/fake_ec.cpp ;;
             esac
             # ec_protocol_tests and app_bridge_tests use std::thread for the transaction
@@ -89,7 +91,8 @@ jobs:
           # still exits 0, so this is verified rather than assumed.
           # See tests/test_check.h.
           for suite in core_tests ec_protocol_tests app_bridge_tests \
-                       ecdiag_tests legacy_policy_tests legacy_backend_tests; do
+                       ecdiag_tests legacy_policy_tests legacy_backend_tests \
+                       tvicport_backend_tests; do
             # core_tests uses the fake backend; the EC suites use the fake EC.
             # legacy_policy_tests supplies its own doubles inline and needs no
             # fake. legacy_backend_tests does need fake_ec.cpp - for FakeClock,
@@ -101,7 +104,7 @@ jobs:
             # have failed four minutes into a CI run.
             case "$suite" in
               core_tests)          FAKE=tests/fake_backend.cpp ;;
-              legacy_policy_tests) FAKE=/dev/null ;;
+              legacy_policy_tests | tvicport_backend_tests) FAKE=/dev/null ;;
               *)                   FAKE=tests/fake_ec.cpp ;;
             esac
             "$CXX" -std=c++17 -O2 -DNDEBUG -Wall -Wextra -Werror -pedantic \
@@ -153,6 +156,7 @@ jobs:
             out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\ecdiag_tests.exe
             out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\legacy_policy_tests.exe
             out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\legacy_backend_tests.exe
+            out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\tvicport_backend_tests.exe
 
       - name: Upload build log
         if: always()
@@ -176,6 +180,7 @@ jobs:
                         tests\app_bridge_tests.vcxproj tests\ecdiag_tests.vcxproj
                         tests\legacy_policy_tests.vcxproj
                         tests\legacy_backend_tests.vcxproj
+                        tests\tvicport_backend_tests.vcxproj
           /m
           /p:Configuration=Release
           /p:Platform=x64
@@ -194,6 +199,7 @@ jobs:
             out\tests\x64\Release\ecdiag_tests.exe
             out\tests\x64\Release\legacy_policy_tests.exe
             out\tests\x64\Release\legacy_backend_tests.exe
+            out\tests\x64\Release\tvicport_backend_tests.exe
 
       - name: Confirm the core really was compiled with /W4 and /WX
         # Guards against the flag silently not being applied, which would make
@@ -202,7 +208,7 @@ jobs:
         shell: pwsh
         run: |
           $log = Get-Content build-core-wx.log -Raw
-          $coreUnits = @('core_types', 'sensor_validation', 'fan_curve', 'controller', 'io_backend', 'ec_access', 'ec_protocol', 'ecdiag', 'app_bridge', 'legacy_policy', 'legacy_backend')
+          $coreUnits = @('core_types', 'sensor_validation', 'fan_curve', 'controller', 'io_backend', 'ec_access', 'ec_protocol', 'ecdiag', 'app_bridge', 'legacy_policy', 'legacy_backend', 'tvicport_backend')
           $fail = @()
           foreach ($u in $coreUnits) {
             $lines = $log -split "`r?`n" | Where-Object { $_ -match "$u\.cpp" -and $_ -match '\bcl\.exe\b|compiler' }
@@ -405,6 +411,7 @@ jobs:
                         tests/app_bridge_tests.vcxproj tests/ecdiag_tests.vcxproj
                         tests/legacy_policy_tests.vcxproj
                         tests/legacy_backend_tests.vcxproj
+                        tests/tvicport_backend_tests.vcxproj
           /p:Configuration=Release
           /p:Platform=x64
           /p:RunCodeAnalysis=true

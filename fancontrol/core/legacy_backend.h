@@ -11,21 +11,6 @@ namespace tpfancontrol {
 namespace core {
 
 // ---------------------------------------------------------------------------
-// One call to the privileged I/O primitive, recorded for evidence.
-//
-// The trace is the point of this class. The EC transaction is a sequence of
-// port writes and reads, and a claim like "this cycle wrote nothing" is only
-// checkable if the calls are recorded. Without a trace, the only way to find
-// out what reached the hardware is to read the hardware.
-// ---------------------------------------------------------------------------
-struct PortCall {
-    bool isWrite = false;
-    std::uint16_t port = 0;
-    std::uint8_t value = 0;
-    bool ok = false;
-};
-
-// ---------------------------------------------------------------------------
 // An IIoBackend over the legacy driver's port primitives.
 //
 // T3-02. The legacy application reaches the EC through TVicPort's ReadPort and

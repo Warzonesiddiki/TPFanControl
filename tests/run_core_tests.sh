@@ -13,6 +13,9 @@
 #                         request, including the refusal to address one fan
 #   legacy_backend_tests- the EC access policy, including the read-only state
 #                         an unverified machine is held in
+#   tvicport_backend_tests
+#                       - the TVicPort baseline adapter: the driver lifecycle,
+#                         and the hard-access switch it does NOT flip by itself
 #
 # This is the suite CI runs on every push, and the one a contributor can run
 # without Visual Studio. It is not a substitute for the Windows build: see
@@ -39,7 +42,8 @@ $ROOT/fancontrol/core/ec_protocol.cpp
 $ROOT/fancontrol/core/ecdiag.cpp
 $ROOT/fancontrol/core/app_bridge.cpp
 $ROOT/fancontrol/core/legacy_policy.cpp
-$ROOT/fancontrol/core/legacy_backend.cpp"
+$ROOT/fancontrol/core/legacy_backend.cpp
+$ROOT/fancontrol/core/tvicport_backend.cpp"
 
 # $1 = suite name, $2 = extra sources, $3 = extra compile flags, $4 = extra link flags
 build_and_run() {
@@ -87,6 +91,14 @@ build_and_run ecdiag_tests \
 
 build_and_run legacy_policy_tests \
     "$ROOT/tests/legacy_policy_tests.cpp" \
+    "" \
+    ""
+
+# T5-01. Supplies its own fake TVicPort DLL inline - there is no vendor header
+# to include and nothing here may touch a real port - so it needs no fake_ec.cpp
+# and no threading library.
+build_and_run tvicport_backend_tests \
+    "$ROOT/tests/tvicport_backend_tests.cpp" \
     "" \
     ""
 

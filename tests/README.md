@@ -1,6 +1,6 @@
 # Portable core tests
 
-Six suites exercise the hardware-independent core under `fancontrol/core/`. None
+Seven suites exercise the hardware-independent core under `fancontrol/core/`. None
 of them loads Windows headers, a driver, or a physical EC, and no test issues a
 real port I/O operation.
 
@@ -12,6 +12,7 @@ real port I/O operation.
 | `ecdiag_tests` | 29 | the read-only diagnostic: a full run writes no register, the integrity checks catch a reader that does, strict JSON parsing |
 | `legacy_policy_tests` | 20 | the legacy UI's intent translated to a core request; the single-fan refusal; the monitor-only guard |
 | `legacy_backend_tests` | 16 | the port backend: port numbers arrive unchanged, `EcBus` + backend is one transaction, register writes are denied by default |
+| `tvicport_backend_tests` | 19 | the TVicPort adapter's lifecycle against a fake DLL: what it opens, what it refuses to open, and the hard-access switch it leaves alone |
 
 `core_tests` reports no count: it predates the convention and was not renumbered.
 The others print their own count and fail if it is wrong, so a suite that silently
@@ -43,7 +44,8 @@ g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
 
 Which fake a suite needs is not uniform, and the runner's table is the record:
 `core_tests` uses `tests/fake_backend.cpp`; the EC suites use `tests/fake_ec.cpp`;
-`legacy_policy_tests` supplies its own doubles inline and needs neither. This has
+`legacy_policy_tests` and `tvicport_backend_tests` supply their own doubles inline
+and need neither. This has
 already caused one CI-shaped mistake — a suite that stopped linking because its
 fake was moved — which is why `scripts/check_ci_steps.py` executes the workflow's
 own portable steps locally.
