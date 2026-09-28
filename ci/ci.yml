@@ -210,6 +210,31 @@ jobs:
             git diff --check HEAD~1 HEAD || git diff --check
           fi
 
+      - name: Solution and project structure
+        # Catches a Project( with no EndProject, a project file that does not
+        # exist, a vcxproj listing a source that is not on disk, and a project
+        # that is not mapped into all four configurations. Every one of those
+        # produces a build that is less than it appears to be, and none of them
+        # is visible without a machine that has MSBuild.
+        run: python3 scripts/check_projects.py
+
+      - name: Shell scripts start with a clean shebang
+        # A UTF-8 BOM is invisible in an editor and fatal to /bin/sh: the kernel
+        # reads the first two bytes as '#!', fails, and the script is
+        # re-interpreted as shell source. It produces one confusing error line
+        # and then runs anyway, which is worse than failing cleanly.
+        run: |
+          set -eu
+          bad=0
+          for f in $(git ls-files '*.sh'); do
+            if ! head -c 2 "$f" | grep -q '#!'; then
+              echo "::error::$f does not begin with a shebang (BOM or missing)"
+              bad=1
+            fi
+          done
+          [ "$bad" -eq 0 ]
+          echo "all shell scripts have a clean shebang"
+
       - name: Markdown link check
         run: python3 scripts/check_links.py
 
