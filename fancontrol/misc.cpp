@@ -841,12 +841,14 @@ FANCONTROL::Tracecsvod(const char *text)
 //-------------------------------------------------------------------------
 //  create a thread
 //-------------------------------------------------------------------------
+// Uses _beginthreadex rather than CreateThread. The worker thread is created and
+// destroyed once per data cycle, and CreateThread does not initialise or release the
+// per-thread CRT block, so each cycle would leak one. The return value is cast back
+// to HANDLE so the rest of the class keeps its existing HANDLE-typed member.
 HANDLE
-FANCONTROL::CreateThread(int (_stdcall *fnct)(ULONG), ULONG p)
+FANCONTROL::CreateThread(unsigned (__stdcall *fnct)(LPVOID), LPVOID p)
 {
-    LPTHREAD_START_ROUTINE thread= (LPTHREAD_START_ROUTINE)fnct;
-    DWORD tid;
-    HANDLE hThread;
-    hThread= ::CreateThread(NULL, 8*4096, thread, (void*)p, 0, &tid);
-    return hThread;
+    unsigned tid= 0;
+    uintptr_t hThread= ::_beginthreadex(NULL, 8*4096, fnct, p, 0, &tid);
+    return (HANDLE)hThread;
 }

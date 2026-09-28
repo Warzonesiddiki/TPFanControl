@@ -1,4 +1,4 @@
-//systemheaders in one file for using precompiled headers.
+﻿//systemheaders in one file for using precompiled headers.
 
 //be compatible downto win2k
 #define _WIN32_WINNT 0x0500

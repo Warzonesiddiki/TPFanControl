@@ -1,0 +1,52 @@
+TPFanControl
+===========
+
+Copyright (c) the TPFanControl contributors.
+
+The original TPFanControl application is by the TPFanControl authors; see
+`docs/README.md` and the repository history for attribution. This repository
+contains no warranty claim of compatibility with any specific laptop model
+until one has been verified; see `docs/HARDWARE_VERIFICATION.md`.
+
+## Public domain dedication
+
+To the extent possible under law, the authors have dedicated all copyright and
+related rights in the source code, documentation, and test material in this
+repository to the public domain worldwide, under the
+[Creative Commons CC0 1.0 Universal Public Domain Dedication](https://creativecommons.org/publicdomain/zero/1.0/).
+
+In plain terms: you may use, copy, modify and redistribute this work without
+permission, and without warranty. You may not hold the authors liable for
+damages arising from its use.
+
+## Exceptions
+
+Two bundled items are NOT covered by the dedication above, because they are
+third-party redistribution and cannot be relicensed by this project:
+
+1. **`fancontrol/TVicPort.lib`** — the import library for the TVicPort kernel
+   driver, by Pawel Król. It is redistributed unmodified under its own terms.
+   The driver itself is **not** included and must not be loaded without a
+   separate, explicit decision. See ADR-014 and `SECURITY.md` section 3.
+
+2. **Legacy `TPFCIcon/` and `TPFCIcon_noballons/` sources** — carried over from
+   the upstream project under their original terms.
+
+Before redistributing this repository, re-check both items. See
+`docs/IMPLEMENTATION_CHECKLIST.md` task T0-07 and `SECURITY.md` section 3 for
+the full dependency record.
+
+## Safety notice
+
+This software controls the cooling fans of a laptop by writing to that
+machine's Embedded Controller. A mistake can overheat hardware, damage it, or
+in the worst case destroy it. A laptop that fans loudly is working correctly.
+
+This project is not hardware-qualified. No commit in this repository carries
+evidence that it has been validated on any specific machine. Read
+`docs/SAFETY.md` and `docs/HARDWARE_VERIFICATION.md` before running it on
+anything you care about, and prefer the BIOS over this software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.

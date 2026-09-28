@@ -1,4 +1,4 @@
-
+﻿
 
 #include "_prec.h"
 #include "fancontrol.h"

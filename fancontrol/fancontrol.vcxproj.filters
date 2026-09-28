@@ -13,10 +13,28 @@
       <UniqueIdentifier>{464e72c5-538b-4a91-9ac4-6d074a681d2d}</UniqueIdentifier>
       <Extensions>ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe</Extensions>
     </Filter>
+    <Filter Include="Core">
+      <UniqueIdentifier>{a92e2f76-38e0-44d3-8f4d-9ef8f2bcf8d2}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="_prec.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="core\core_types.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="core\sensor_validation.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="core\fan_curve.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="core\controller.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="core\io_backend.cpp">
+      <Filter>Core</Filter>
     </ClCompile>
     <ClCompile Include="approot.cpp">
       <Filter>Source Files</Filter>
@@ -46,6 +64,21 @@
   <ItemGroup>
     <ClInclude Include="_prec.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="core\core_types.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\sensor_validation.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\fan_curve.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\controller.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\io_backend.h">
+      <Filter>Core</Filter>
     </ClInclude>
     <ClInclude Include="approot.h">
       <Filter>Header Files</Filter>

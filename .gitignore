@@ -1,0 +1,119 @@
+# TPFanControl ignore rules.
+#
+# Everything here is generated, local, or machine-specific. Nothing in this file
+# may match a source file, a resource, the canonical example profile, or the
+# reviewed vendor import library.
+#
+# See docs/IMPLEMENTATION_CHECKLIST.md tasks T0-01 … T0-05 and ADR-016.
+
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
+# A stale .obj can satisfy a link step without the corresponding source having
+# been recompiled, which is how a broken build becomes a passing one.
+[Bb]uild/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+*.obj
+*.o
+*.pch
+*.ipch
+*.idb
+*.ilk
+*.exp
+*.res
+*.tlb
+*.tlog
+*.lastbuildstate
+*.unsuccessfulbuild
+
+# The CI definition is version-controlled at ci/ci.yml so it lives in git.
+# Enabling it requires writing .github/workflows/, which the sandbox's GitHub
+# App token is not permitted to do. See ci/README.md.
+.github/
+
+# Visual Studio user state and databases
+.vs/
+*.VC.db
+*.VC.opendb
+*.suo
+*.user
+*.sdf
+*.opensdf
+.vscode/
+.idea/
+
+# Compiled binaries
+*.exe
+*.dll
+*.pdb
+
+# NOTE: *.lib is deliberately NOT ignored. fancontrol/TVicPort.lib is the
+# reviewed vendor import described in SECURITY.md section 3 and is required to
+# link. Ignoring it would silently break the build for a fresh clone.
+
+# ---------------------------------------------------------------------------
+# Runtime output
+# ---------------------------------------------------------------------------
+# The application writes logs, CSV traces and a working copy of its profile
+# next to the executable. Those are local state, never source.
+*.log
+*_csv.txt
+*_last_csv.txt
+
+# A runtime INI copy is local state. The canonical example profile is the
+# tracked fancontrol/TPFanControl.ini and is NOT matched by these rules.
+fancontrol/Debug/*.ini
+fancontrol/Debug/*.ini.local
+fancontrol/Release/*.ini
+fancontrol/Release/*.ini.local
+fancontrol/Backup/
+
+# ---------------------------------------------------------------------------
+# Test and tool output
+# ---------------------------------------------------------------------------
+# The portable test harness builds into a temporary directory, but keep a
+# pattern here so a manual in-tree build cannot be committed by accident.
+tpfancontrol-core-test/
+tpfancontrol-core-san/
+core_tests
+core_tests.exe
+ec_protocol_tests
+ec_protocol_tests.exe
+*.sarif
+*.diag.xml
+
+# ---------------------------------------------------------------------------
+# Credentials and secrets
+# ---------------------------------------------------------------------------
+# The project has no network component and must never acquire one without a
+# decision record. These patterns are defence in depth.
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.keystore
+credentials.json
+secrets.json
+
+# Python bytecode from the CI helper scripts
+__pycache__/
+*.py[cod]
+
+# ---------------------------------------------------------------------------
+# Editor and OS noise
+# ---------------------------------------------------------------------------
+*~
+*.bak
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Visual Studio writes this upgrade log into the project directory. It is
+# generated state and was previously tracked; `git add -A` re-added it once
+# because no rule covered it.
+UpgradeLog.htm
