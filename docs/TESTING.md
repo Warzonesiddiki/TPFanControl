@@ -64,9 +64,9 @@ a driver:
 |---|---|---:|---|
 | `core_tests` | `tests/core_tests.cpp` | 11 | curves, sensor validation, stuck/stale sources, controller gates, safety states |
 | `ec_protocol_tests` | `tests/ec_protocol_tests.cpp` | 42 | `EcBus` transactions, wire sequence, IBF/OBF waits, timeouts, the `0x31` refusal |
-| `app_bridge_tests` | `tests/app_bridge_tests.cpp` | 31 | the seam: a command reaches the EC only if the core authorised it, readback verification, fail-safe on a read failure |
+| `app_bridge_tests` | `tests/app_bridge_tests.cpp` | 35 | the seam: a command reaches the EC only if the core authorised it, readback verification, fail-safe on a read failure, and replacing the curve at run time (the profile switch) |
 | `ecdiag_tests` | `tests/ecdiag_tests.cpp` | 29 | the read-only diagnostic: a full run through a real `EcBus` writes no register, the integrity checks catch a reader that does, and the JSON report is accepted by a strict parser |
-| `legacy_policy_tests` | `tests/legacy_policy_tests.cpp` | 27 | the legacy UI's intent translated to a core request; the refusal to address an individual fan; the monitor-only guard; the final-manual refusal; and the startup assessment — the three modes, the 128-machine exhaustive agreement with `CapabilityReport::controlEligible()`, and the rule that the status text is never blank |
+| `legacy_policy_tests` | `tests/legacy_policy_tests.cpp` | 38 | the legacy UI's intent translated to a core request; the refusal to address an individual fan; the monitor-only guard; the final-manual refusal; and the startup assessment — the three modes, the 128-machine exhaustive agreement with `CapabilityReport::controlEligible()`, and the rule that the status text is never blank |
 | `legacy_backend_tests` | `tests/legacy_backend_tests.cpp` | 16 | the port backend: that port numbers arrive unchanged, that `EcBus` + backend is exactly one transaction, and that register writes are denied by default |
 | `tvicport_backend_tests` | `tests/tvicport_backend_tests.cpp` | 19 | the TVicPort baseline adapter's lifecycle, against a fake DLL: what it opens and closes, and the hard-access switch it does not flip unless asked |
 
@@ -111,6 +111,11 @@ Three things, stated because each is easy to assume has been covered:
   `StartCore()` is a `FANCONTROL` member that no Test here can even link
   against. `scripts/check_core_bootstrap.py`, in §3.1, is the static stand-in
   for the part no test can reach.
+- **They do not prove the application chooses the level in production.** The
+  mapping from `SmartLevels` to the core's curve is tested, and so is the
+  controller's behaviour under it, but the call site (`CoreInit`, and the six
+  profile switches) is Win32 code that no test here executes. That is why
+  `scripts/check_core_bootstrap.py` states the wiring as a static property.
 - **They do not prove the fan moves.** Everything above `LegacyBackend` is
   exercised against a fake. The first real EC transaction is a Phase 0 event and
   must be read-only.
@@ -128,9 +133,9 @@ regression guards for them are static and live in `scripts/`:
 
 | Script | Purpose |
 |---|---|
-| `check_legacy_ec.py` | fails the build on a write to the fan-selector register, or a fan-level write from outside the core, anywhere in the legacy sources |
+| `check_legacy_ec.py` | fails the build on a write to the fan-selector register, a fan-level write from outside the core, or a smart-table row compared against a temperature — the deleted legacy decision procedure — anywhere in the legacy sources |
 | `check_legacy_ec_selftest.py` | proves that guard still matches what it claims to, over 17 cases of which half must not match |
-| `check_core_bootstrap.py` | T5-04: fails the build unless the application actually starts the core — the seam is called from a file that is not the one defining it, it is declared after `public:`, `StartCore` calls `CoreInit`, and `AppBridge` has exactly one construction site |
+| `check_core_bootstrap.py` | T5-04 and T3-04: fails the build unless the application actually starts the core — the seam is called from a file that is not the one defining it, it is declared after `public:`, `StartCore` calls `CoreInit`, `AppBridge` has exactly one construction site, and every smart-profile copy is followed by `ApplySmartLevelsToCore()` |
 | `check_core_bootstrap.py --selftest` | proves that guard still matches what it claims to, over 7 cases of which six must be caught |
 
 `check_core_bootstrap.py` exists because the defect it guards was invisible in

@@ -156,6 +156,95 @@ StartupAssessment assessStartup(const LegacyCapabilityInputs& in)
 }
 
 // ---------------------------------------------------------------------------
+// The legacy temperature table, as a curve for the core (T3-04, T3-05)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The legacy manual range. Level commands in the application were 0x00-0x07;
+// the values above it were specials, and 0x80 meant "give the fan back to the
+// firmware". The core's profile range has to be the same, or a table that the
+// legacy code would have applied is silently reinterpreted.
+constexpr int kLegacyMaximumLevel = 7;
+
+// The legacy table's terminator. A negative temperature ends the list.
+bool isEndMarker(const LegacyCurveRow& row)
+{
+    return row.temperatureC < 0;
+}
+
+} // namespace
+
+LegacyCurveMapping curveFromLegacyRows(const LegacyCurveRow* rows, std::size_t count)
+{
+    LegacyCurveMapping mapping;
+
+    // The safe direction is the firmware, and the legacy table says the same
+    // thing with 0x80. An emergency command that turned the fan *up* would be
+    // an invented behaviour: nothing in the hardware report establishes that a
+    // full-speed manual write is safer than the firmware's own response.
+    mapping.config.minimumLevel = 0;
+    mapping.config.maximumLevel = kLegacyMaximumLevel;
+    mapping.config.emergencyCommand = FanCommand::biosAutomatic();
+    // No dwell. The application evaluates the table once per data cycle, so the
+    // curve is already paced by the cycle timer; a second, invented time limit
+    // would change when the fan responds without anything to justify it.
+    mapping.config.minimumDwellMs = 0;
+
+    // A null array with a non-zero count is a caller bug, and the honest answer
+    // is an empty curve that fails validation rather than a crash.
+    const std::size_t usable = rows == nullptr ? 0 : count;
+
+    for (std::size_t i = 0; i < usable; ++i) {
+        const LegacyCurveRow& row = rows[i];
+
+        if (isEndMarker(row)) {
+            mapping.hadEndMarker = true;
+            break;
+        }
+
+        CurvePoint point;
+        point.upTemperatureC = row.temperatureC;
+        // One temperature per row in the legacy table, used for the up scan and
+        // the down scan alike. Keeping them equal is what makes the mapping
+        // faithful rather than approximate.
+        point.downTemperatureC = row.temperatureC;
+
+        if (row.command == 0x80) {
+            point.command = FanCommand::biosAutomatic();
+        } else if (row.command >= 0 && row.command <= kLegacyMaximumLevel) {
+            point.command = FanCommand::levelCommand(row.command);
+        } else {
+            // 0x40 and the other specials. Refused rather than guessed: the
+            // core has no such command, and mapping it onto the nearest level
+            // would be a claim about a register value nobody here measured.
+            mapping.validation.errors.push_back(ValidationError{
+                "unsupported_legacy_level",
+                "smart table row " + std::to_string(i) + " asks for fan value "
+                    + std::to_string(row.command)
+                    + ", which is neither a level in 0-"
+                    + std::to_string(kLegacyMaximumLevel)
+                    + " nor the BIOS value 0x80. This project has not established"
+                      " what the other legacy specials mean, so the table is refused"
+                      " rather than reinterpreted."});
+            mapping.rowsUsed = static_cast<int>(i);
+            mapping.validation.valid = false;
+            return mapping;
+        }
+
+        mapping.config.points.push_back(point);
+        mapping.rowsUsed = static_cast<int>(i + 1);
+    }
+
+    // validateCurve is the same predicate the CurveController applies when it
+    // refuses to run an invalid curve, so asking it here means the application
+    // can report *why* the table was refused instead of only that control did
+    // not start.
+    mapping.validation = validateCurve(mapping.config);
+    return mapping;
+}
+
+// ---------------------------------------------------------------------------
 // Intent evaluation
 // ---------------------------------------------------------------------------
 
@@ -182,6 +271,18 @@ std::string hex2(int value)
         return "0x??";
     }
     return std::string(buffer, static_cast<std::size_t>(written));
+}
+
+// What the request asked for, in the words a message needs. A curve request
+// carries no level - the core's curve decides it - so it must not be rendered
+// as one: hex2(-1) is "0xFF", and a fabricated register value in a log is worse
+// than no value at all.
+std::string describeRequest(const LegacyIntent& intent)
+{
+    if (intent.source == LegacySource::Smart) {
+        return "curve control";
+    }
+    return "level " + hex2(intent.level);
 }
 
 std::string fanName(const LegacyIntent& intent)
@@ -211,8 +312,8 @@ LegacyDecision evaluateIntent(const LegacyIntent& intent, std::uint64_t nowMs)
     if (!intent.controlEnabled && intent.source != LegacySource::Startup) {
         return refuse(
             LegacyRefusal::NotControlEnabled,
-            std::string("Refused: ") + toText(intent.source) + " level "
-                + hex2(intent.level)
+            std::string("Refused: ") + toText(intent.source) + " "
+                + describeRequest(intent)
                 + " not applied. The application is in monitor-only mode, so no EC"
                   " register was written. Enable control in the UI to apply levels.");
     }
@@ -311,8 +412,8 @@ bool describeRequestedLevel(const LegacyIntent& intent, char* buffer, int size)
         return false;
     }
     const int written = std::snprintf(
-        buffer, static_cast<std::size_t>(size), "%s requested level %s for %s",
-        toText(intent.source), hex2(intent.level).c_str(), fanName(intent).c_str());
+        buffer, static_cast<std::size_t>(size), "%s requested %s for %s",
+        toText(intent.source), describeRequest(intent).c_str(), fanName(intent).c_str());
     if (written < 0 || written >= size) {
         // Truncated: say so rather than returning a half sentence that could be
         // mistaken for the whole message.

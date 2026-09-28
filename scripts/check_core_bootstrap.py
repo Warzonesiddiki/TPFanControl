@@ -37,9 +37,20 @@ So this check is about a property that spans files:
       construction sites would mean two configurations, and the read-only one
       and the writable one would eventually be built in different places.
 
+  Rule 5 - the curve follows the selected profile, described below.
+
   Rule 4 - changing the core's startup is not possible without touching here.
       ``CoreInit`` is called from ``StartCore``. The two cannot drift into
       "someone moved the call and forgot the seam" without this file noticing.
+
+  Rule 5 - a profile switch reaches the core.
+      The application selects a smart profile by copying ``SmartLevels1`` or
+      ``SmartLevels2`` over ``SmartLevels``, in six places. Since T3-04 the
+      level comes from the core's curve, which is built from ``SmartLevels``, so
+      every one of those copies has to be followed by
+      ``ApplySmartLevelsToCore()``. A copy without it leaves the previous
+      profile's curve in force while the UI says otherwise - a silent
+      behavioural difference, and exactly the class of defect Rule 1 exists for.
 
 What this check cannot do: it cannot run the application. It is a static
 property check with a self-test, in the same spirit as ``check_legacy_ec.py``,
@@ -68,6 +79,11 @@ SEAM_CALLS = ("StartCore", "CoreShutdown")
 SEAM_DECLARATIONS = ("StartCore", "CoreStatus")
 BOOTSTRAP = "CoreInit"
 BRIDGE_TYPE = "AppBridge"
+
+# The profile switch: a copy of one smart table over the active one, and the
+# call that has to follow it.
+PROFILE_SOURCE_TABLES = ("SmartLevels1", "SmartLevels2")
+PROFILE_APPLY = "ApplySmartLevelsToCore"
 
 
 def strip_comments(text):
@@ -179,6 +195,54 @@ def check(files):
                                   ", ".join(os.path.basename(p) for p in constructions)
                                   or "none"))
 
+    # Rule 5: every profile switch re-installs the curve.
+    #
+    # The window is *adjacency*, not "within N lines", and that is not a
+    # stylistic choice: the first version of this rule used a 25-line window and
+    # was defeated by the very layout it was written for. Two of the six switch
+    # sites sit sixteen lines apart, so the second site's apply call fell inside
+    # the first site's window and covered for it. Removing the first call left
+    # the rule green. The rule now looks at the next event of either kind: the
+    # line after a copy is either the apply call or the next copy, and the next
+    # copy is a violation.
+    switch_pattern = re.compile(
+        r"this->SmartLevels\s*\[\s*\w+\s*\]\s*\.\s*fan\s*="
+        r"\s*this->SmartLevels[12]\s*\[")
+    profile_switches = 0
+    for path, text in files.items():
+        if not path.lower().endswith(SOURCE_SUFFIXES):
+            continue
+        # Stripped line by line, so a reported line number is the line number in
+        # the file. strip()ing the whole text first collapses multi-line block
+        # comments into one blank, which shifts every index after the first one -
+        # and a violation report that points at the wrong line wastes the time of
+        # whoever has to act on it.
+        lines = [strip_comments(line) for line in text.splitlines()]
+        events = []
+        for index, line in enumerate(lines):
+            if switch_pattern.search(line):
+                events.append((index, "switch", line))
+            elif PROFILE_APPLY + "()" in line:
+                events.append((index, "apply", line))
+        for position, (index, kind, _line) in enumerate(events):
+            if kind != "switch":
+                continue
+            profile_switches += 1
+            followed = position + 1 < len(events) and events[position + 1][1] == "apply"
+            if not followed:
+                problems.append(
+                    "%s line %d copies a smart table over SmartLevels and the next "
+                    "thing that happens is not %s(). The profile the user selected "
+                    "would not reach the core's curve, so the fan would keep "
+                    "following the profile that was in force before the switch."
+                    % (os.path.basename(path), index + 1, PROFILE_APPLY))
+    if profile_switches == 0 and defines_startcore:
+        problems.append(
+            "found no smart-profile switch in the application. The copy sites are "
+            "how the user selects a profile; if they are gone, this rule is no "
+            "longer checking anything, and a rule that matches nothing reads as "
+            "protection while the tree is unprotected.")
+
     # Rule 4: StartCore actually starts the core.
     for path in defines_startcore:
         clean = strip_comments(files[path])
@@ -235,6 +299,14 @@ void start() {
     fc.StartCore();
     fc.CoreShutdown();
 }
+
+void selectProfile() {
+    for (int i = 0; i < 32; ++i) {
+        this->SmartLevels[i].temp = this->SmartLevels1[i].temp1;
+        this->SmartLevels[i].fan = this->SmartLevels1[i].fan1;
+    }
+    ApplySmartLevelsToCore();
+}
 """
 
 
@@ -289,6 +361,19 @@ bool FANCONTROL::StartCore() { return true; }
 void FANCONTROL::CoreShutdown() { }
 """)
 
+    run("a profile switch with no apply call is caught", True,
+        {approot: FIXTURE_APPROOT.replace("    ApplySmartLevelsToCore();\n", "")})
+
+    run("a second switch masking the first is caught", True,
+        {approot: FIXTURE_APPROOT + """
+void selectAnotherProfile() {
+    for (int i = 0; i < 32; ++i) {
+        this->SmartLevels[i].temp = this->SmartLevels2[i].temp2;
+        this->SmartLevels[i].fan = this->SmartLevels2[i].fan2;
+    }
+}
+"""})
+
     run("a missing declaration is caught", True, {approot: FIXTURE_APPROOT},
         header="""\
 class FANCONTROL
@@ -342,10 +427,11 @@ def main(argv=None):
         for problem in problems:
             sys.stderr.write("  " + problem + "\n\n")
         sys.stderr.write(
-            "T5-04. The portable core has to be started by the application, and the\n"
-            "seam that starts it has to be reachable from the startup path. CoreInit\n"
-            "existed for a whole task with no caller, in a section approot.cpp could\n"
-            "not call, and nothing said so.\n")
+            "T5-04 and T3-04. The portable core has to be started by the\n"
+            "application, the seam that starts it has to be reachable from the\n"
+            "startup path, and the curve the core runs has to be the profile the\n"
+            "user selected. CoreInit existed for a whole task with no caller, in a\n"
+            "section approot.cpp could not call, and nothing said so.\n")
         return 1
 
     sources = sum(1 for p in files if p.lower().endswith(SOURCE_SUFFIXES))

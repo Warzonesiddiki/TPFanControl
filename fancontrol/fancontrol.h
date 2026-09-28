@@ -247,6 +247,15 @@ class FANCONTROL
 		// Releases them. Called when the port driver closes, so nothing can call
 		// through a closed driver.
 		void CoreShutdown();
+		// T3-04. Maps the currently selected smart table into the core's curve
+		// and installs it. Called by CoreInit and after every profile switch,
+		// so the curve in force is always the profile the user selected.
+		//
+		// Does nothing when the core is not built (monitor-only), which is not
+		// an error: there is no curve to install and nothing may command the fan
+		// anyway.
+		void ApplySmartLevelsToCore();
+
 		// The application's sensor names in register order, 0x78 first then
 		// 0xC0. Returns exactly kSensorCount entries, with empty names for
 		// sensors this machine does not have.

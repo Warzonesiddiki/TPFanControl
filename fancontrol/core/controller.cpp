@@ -19,6 +19,19 @@ bool CapabilityReport::controlEligible() const noexcept
            restoreAvailable;
 }
 
+ValidationResult Controller::setCurve(const CurveConfig& config)
+{
+    config_.curve = config;
+    curve_ = CurveController(config);
+
+    // A fresh curve starts uninitialised, so the next update selects an index
+    // from the temperature in front of it rather than carrying an index that
+    // belonged to the previous thresholds.
+    curve_.reset();
+
+    return curve_.validation();
+}
+
 std::string CapabilityReport::blockingReason() const
 {
     if (monitorOnlyForced) {

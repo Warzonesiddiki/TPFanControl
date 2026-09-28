@@ -157,6 +157,12 @@ public:
         std::uint64_t nowMs,
         std::uint64_t rpmObservationElapsedMs);
 
+    // Replaces the curve the controller runs (T3-04). Forwards to
+    // Controller::setCurve, which installs the configuration verbatim and
+    // reports the validation; nothing else about the bridge changes, so a
+    // configuration change cannot alter what the machine is allowed to do.
+    ValidationResult setCurve(const CurveConfig& config);
+
     const EcBus& bus() const noexcept;
     const Controller& controller() const noexcept;
 

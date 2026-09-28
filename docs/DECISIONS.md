@@ -970,3 +970,117 @@ being set by default, and the mode becomes `ControlEligible` - at which point th
 activation rules of ADR-014 are the only thing between the user and a moving fan.
 If a second backend arrives, this seam does not change: it takes an `IIoBackend`,
 not a TVicPort.
+
+## ADR-028 — The legacy temperature table becomes the core's curve, and the profile switch re-installs it
+
+**Status.** Accepted, T3-04/T3-05.
+
+**Context.** T3-05 asks for the legacy decision code to be deleted or quarantined
+once the core is authoritative. The last piece of it was `SmartControl()`: two
+scans of the `SmartLevels` table per data cycle, picking a fan value from
+`MaxTemp` and passing it to `SetFan`. T3-04's remaining half was the same thing
+seen from the other side — the *decision* still happened in the legacy code.
+
+Deleting a decision is only correct once something else makes it. The core has a
+`CurveController` with up/down thresholds, a hysteresis band, a minimum dwell
+time and validation; what it did not have was the application's own configured
+table.
+
+**Decision 1 — the table is configuration, and it is mapped, not moved.**
+
+`core::curveFromLegacyRows()` is a pure function from `(temperature, fan)` rows
+to a `CurveConfig`. It is called from `CoreInit` and after every profile switch.
+Three consequences worth naming:
+
+- A row with a negative temperature ends the list. The legacy arrays are fixed
+  32-entry arrays, zeroed beyond the table; reading past the marker would read
+  `(0 degrees, level 0)` rows as data and either refuse the table as unordered or
+  accept a rule that turns the fan off below freezing.
+- `0x80` maps to `FanCommand::biosAutomatic()`, which is what the legacy code
+  meant by it, and the core requires it to be terminal (`bios_not_terminal`
+  otherwise). The legacy code could be configured with rows after it.
+- A command outside `0-7` that is not `0x80` is refused with the row and the
+  value named. `0x40` is a legacy special gated behind `Lev64Norm`, and nobody
+  here has established what it does to the EC. Mapping it to the nearest level
+  would be a guess about a register value, and the fan is not a place to guess.
+
+The mapping is stricter than the legacy scan in two ways, both deliberate: a
+table that rises in temperature while falling in fan is refused
+(`descending_command`) rather than applied, and a table that does not rise
+strictly is refused (`unordered_temperature`). The legacy scan took the last
+matching row, so it tolerated both.
+
+**Decision 2 — the curve does not enable anything.**
+
+The curve is a candidate configuration, exactly like the table it came from. The
+controller still refuses to issue a command until every Phase 0 verdict holds,
+and a test asserts that: with an empty `CapabilityReport`, the mapped legacy
+table produces no command and no register write. Mapping the table changes *how*
+the level is chosen, never *whether* it may be.
+
+**Decision 3 — a profile switch re-installs the curve.**
+
+The application selects a smart profile by copying `SmartLevels1` or
+`SmartLevels2` over `SmartLevels`, in six separate places. Once the level comes
+from the core, those copies have to reach the core or the selected profile would
+quietly stop being the one in force — a behavioural regression introduced by the
+refactor itself, and the kind that is invisible in a diff.
+
+`Controller::setCurve()`/`AppBridge::setCurve()` install a configuration verbatim,
+including an invalid one: `update` then refuses to control (`invalid_curve`) rather
+than continuing to run thresholds nobody selected. The alternative — keep the old
+curve when the new one fails validation — was rejected because the fan would then
+follow a profile the user had replaced.
+
+`setCurve` changes thresholds only. Capabilities, the safety state and the manual
+override are untouched, and a test asserts that a configuration change cannot turn
+an unverified machine into a controlled one.
+
+**Alternatives considered.**
+
+- *Recreate the whole bridge on a profile switch* — rejected: it resets the
+  controller's state, which on a verified machine would drop a manual override
+  and restart the consecutive-samples gate. Replacing the curve changes exactly
+  what changed.
+- *Precompute the level in the mapping and pass it to `SetFan(Smart, level)`* —
+  rejected: that is the legacy design with a different owner. The level belongs to
+  the controller, which is the only component that can see the capabilities, the
+  readback result and the dwell time.
+- *Keep the legacy scan as a fallback when the curve is invalid* — rejected. A
+  fallback decision path is a second decision path.
+- *Invent a mapping for `0x40` from the name `Lev64Norm`* — rejected. The name is
+  not evidence.
+
+**Safety impact.** Downward in what the software can do to the machine. Control
+requires the same Phase 0 verdicts; the new code adds validation the legacy scan
+did not have; `SmartControl` no longer computes a level at all, so a table can no
+longer be applied by a scan whose rules differ from the ones the tests exercise.
+Nothing here loads a driver or weakens a Windows security setting.
+
+**Testing and evidence.** `tests/legacy_policy_tests.cpp` 27 → 38 tests: the
+mapping, the end marker, the missing end marker, the empty table, the unknown
+special, the unordered table, the non-terminal BIOS row, and two integration
+tests that drive a real `Controller` from a mapped table — one asserting the
+levels it issues, one asserting that an unverified machine still gets no command.
+`tests/app_bridge_tests.cpp` 31 → 35: replacing the curve changes the issued
+level, replacing it does not change what is allowed, an invalid curve stops
+control rather than reverting, and a profile swap changes the level end to end.
+`scripts/check_legacy_ec.py` gains the rule that fails the build when a smart-table
+row is compared against `MaxTemp` — the deleted decision — with six new self-test
+cases, and `scripts/check_core_bootstrap.py` gains the rule that every profile
+copy is followed by `ApplySmartLevelsToCore()`, with two new self-test cases.
+
+**Consequences.** The legacy decision procedure is gone, and both its return and
+the un-applied profile switch are build failures. The application still reads its
+display values through the legacy `ReadEcStatus` on the worker thread; that is the
+read path, not the decision path, and it is recorded under T3-02 and T3-06 rather
+than quietly claimed as done here. `HandleData` still runs on the timer, and it
+still calls `SmartControl` — which now makes one core request instead of computing
+a level.
+
+**Revisit conditions.** When Phase 0 produces a hardware report and control is
+enabled for a machine, the curve's thresholds are the ones that will actually move
+its fan. At that point the mapping's use of `SmartLevels` as the source and its
+refusal of the legacy specials have to be re-examined against the measured
+register map, and the dwell time (today 0, because the cycle timer already paces
+evaluation) has to be justified by something other than a timer.

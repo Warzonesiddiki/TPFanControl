@@ -26,6 +26,17 @@ What it forbids, and why each one:
     The level belongs to the portable controller. A second place that can
     produce it is a second decision path, which is T3-05.
 
+  a smart-table row compared against the hottest temperature
+    This is the legacy decision procedure itself, and the one T3-05 deleted:
+    ``if (MaxTemp >= SmartLevels[i].temp && SmartLevels[i].fan >= fanctrl)``
+    and its down-trigger twin, scanned on every data cycle. The table is
+    configuration and may still be *read* - the config parser converts it from
+    Fahrenheit, the dialog prints it, and CoreInit maps it into the core's
+    curve - but the moment a row is compared against a temperature, something
+    is choosing a fan level from it again. The pattern is narrow on purpose: it
+    matches a line that names the table and a temperature, and the four places
+    that legitimately read the table do not.
+
 Deliberately absent: a rule about signed ``char``.
 
 An earlier version of this file had one, and its own self-test showed it could
@@ -127,6 +138,30 @@ RULES = [
         "(T3-05). Writes must go through AppBridge::apply, which verifies "
         "readback and refuses anything the core did not authorise.",
     ),
+    (
+        "legacy-curve-decision",
+        # A line that reads the smart table *and* names the temperature it is
+        # being compared against. Matching the identifier alone would report the
+        # config parser, the dialog's table display and the curve construction
+        # in CoreInit, all of which are correct.
+        #
+        # MaxTemp is the application's aggregate; the table's own field is
+        # `.temp`. A line that names both is a comparison between them in any
+        # spelling the legacy code used - >=, <=, > - and the lookahead stops
+        # the match at a statement boundary so two unrelated statements on one
+        # line are not joined.
+        re.compile(
+            r"\bSmartLevels[12]?\b"
+            r"(?=[^;]*\bMaxTemp\b)"
+            r"|"
+            r"\bMaxTemp\b(?=[^;]*\bSmartLevels[12]?\b)"
+        ),
+        "chooses a fan level from the smart table by comparing a row against "
+        "the hottest temperature. That is the legacy decision procedure (T3-05) "
+        "and the core's curve replaced it; the table is configuration now. A "
+        "level must be produced by the portable controller, where the "
+        "thresholds, the dwell time and the readback verification are.",
+    ),
 ]
 
 
@@ -199,7 +234,8 @@ def main(argv=None):
         return 1
 
     print("check_legacy_ec: %d legacy source(s) clean; no write to the "
-          "fan-selector register, no fan-level write outside the core"
+          "fan-selector register, no fan-level write outside the core, no "
+          "fan-level decision from the smart table"
           % len(sources))
     return 0
 

@@ -18,6 +18,7 @@
 
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace tpfancontrol {
 namespace test {
@@ -630,6 +631,303 @@ void testStartupTextIsAlwaysPopulated()
     }
 }
 
+// ---------------------------------------------------------------------------
+// The legacy table as a core curve (T3-04, T3-05)
+// ---------------------------------------------------------------------------
+//
+// The legacy application chose the fan level from a (temperature, fan) table
+// scanned every cycle. T3-05 wants that decision gone; it can only go once the
+// core decides the same thing, and the mapping is what closes the gap. These
+// tests are about the mapping and about the fact that a mapped table drives an
+// actual Controller.
+
+// A sample the controller will accept: a value, a fresh timestamp, and the
+// three validity flags a sensor has to earn. Written out rather than
+// brace-initialised because TemperatureSample has grown fields before and a
+// missing one is a compiler warning here, not a silent default.
+core::TemperatureSample validSample(int valueC, std::uint64_t nowMs)
+{
+    core::TemperatureSample sample;
+    sample.valueC = valueC;
+    sample.timestampMs = nowMs;
+    sample.hasValue = true;
+    sample.backendOk = true;
+    sample.sourceValid = true;
+    sample.sentinel = false;
+    sample.source = "test";
+    return sample;
+}
+
+// What the application ships with, in Celsius, exactly as fancontrol.cpp sets
+// it up before the config file is read.
+std::vector<core::LegacyCurveRow> defaultLegacyTable()
+{
+    return {
+        {50, 0},
+        {55, 3},
+        {60, 5},
+        {65, 7},
+        {70, 0x80},
+        {-1, 0x80},   // the end marker
+    };
+}
+
+void testTheLegacyTableBecomesACoreCurve()
+{
+    noteTest();
+    const std::vector<core::LegacyCurveRow> rows = defaultLegacyTable();
+    const core::LegacyCurveMapping mapping =
+        core::curveFromLegacyRows(rows.data(), rows.size());
+
+    CHECK(mapping.validation.valid);
+    CHECK(mapping.rowsUsed == 5);       // the end marker is not a row
+    CHECK(mapping.hadEndMarker);
+    CHECK(mapping.config.points.size() == 5);
+    CHECK(mapping.config.minimumLevel == 0);
+    CHECK(mapping.config.maximumLevel == 7);
+
+    // One temperature per legacy row, used for both directions, and levels in
+    // the order the table gives them.
+    CHECK(mapping.config.points[0].upTemperatureC == 50);
+    CHECK(mapping.config.points[0].downTemperatureC == 50);
+    CHECK(mapping.config.points[0].command == core::FanCommand::levelCommand(0));
+    CHECK(mapping.config.points[4].upTemperatureC == 70);
+    CHECK(mapping.config.points[4].command == core::FanCommand::biosAutomatic());
+
+    // The emergency command is the firmware, never a manual level: nothing in
+    // the hardware report establishes that a full-speed manual write is safer
+    // than letting the firmware respond.
+    CHECK(mapping.config.emergencyCommand == core::FanCommand::biosAutomatic());
+    CHECK(mapping.config.minimumDwellMs == 0);
+}
+
+void testTheEndMarkerStopsTheScan()
+{
+    noteTest();
+    // The legacy arrays are fixed 32-entry arrays, zeroed beyond the table. A
+    // scan that ran past the marker would read (0 degrees, level 0) rows as
+    // real data and would refuse the table as unordered - or, worse, accept a
+    // table that says "the fan is off below 0 degrees".
+    std::vector<core::LegacyCurveRow> rows = defaultLegacyTable();
+    rows.push_back({0, 0});
+    rows.push_back({0, 0});
+
+    const core::LegacyCurveMapping mapping =
+        core::curveFromLegacyRows(rows.data(), rows.size());
+    CHECK(mapping.validation.valid);
+    CHECK(mapping.config.points.size() == 5);
+    CHECK(mapping.rowsUsed == 5);
+}
+
+void testATableWithNoEndMarkerIsStillRead()
+{
+    noteTest();
+    // A caller that passes an exact-length array without the marker gets the
+    // whole array, and says so.
+    const core::LegacyCurveRow rows[] = {{50, 0}, {60, 3}, {70, 0x80}};
+    const core::LegacyCurveMapping mapping =
+        core::curveFromLegacyRows(rows, 3);
+
+    CHECK(mapping.validation.valid);
+    CHECK(!mapping.hadEndMarker);
+    CHECK(mapping.rowsUsed == 3);
+    CHECK(mapping.config.points.size() == 3);
+}
+
+void testAnEmptyTableIsRefusedNotDefaulted()
+{
+    noteTest();
+    // No rows means no curve. The controller refuses control outright when its
+    // curve is invalid, which is what should happen: a missing table is not an
+    // invitation to invent one.
+    const core::LegacyCurveMapping mapping = core::curveFromLegacyRows(nullptr, 0);
+    CHECK(!mapping.validation.valid);
+    CHECK(mapping.config.points.empty());
+
+    bool foundEmptyCurve = false;
+    for (const core::ValidationError& error : mapping.validation.errors) {
+        if (error.code == "empty_curve") {
+            foundEmptyCurve = true;
+        }
+    }
+    CHECK(foundEmptyCurve);
+
+    // A null pointer with a count is a caller bug, and must not be a crash.
+    CHECK(!core::curveFromLegacyRows(nullptr, 4).validation.valid);
+}
+
+void testAnUnknownLegacySpecialIsRefusedByValue()
+{
+    noteTest();
+    // 0x40 (64) is a legacy special gated behind a config flag. Nobody here has
+    // established what it does to the EC, so the table is refused with the row
+    // and the value named - not rounded to the nearest level.
+    std::vector<core::LegacyCurveRow> rows = defaultLegacyTable();
+    rows.insert(rows.begin() + 4, {68, 0x40});
+
+    const core::LegacyCurveMapping mapping =
+        core::curveFromLegacyRows(rows.data(), rows.size());
+    CHECK(!mapping.validation.valid);
+
+    bool named = false;
+    for (const core::ValidationError& error : mapping.validation.errors) {
+        if (error.code == "unsupported_legacy_level"
+            && error.message.find("64") != std::string::npos
+            && error.message.find("row 4") != std::string::npos) {
+            named = true;
+        }
+    }
+    CHECK(named);
+}
+
+void testATableTheLegacyScanWouldHaveAppliedIsRefusedWhenUnordered()
+{
+    noteTest();
+    // The legacy scan walked the table in order and took the last row that
+    // matched, so a table that rose in temperature while falling in fan would
+    // have been applied as written. The core's curve requires the two to agree,
+    // because a curve that asks for less cooling as the machine gets hotter is
+    // not a curve.
+    const core::LegacyCurveRow rows[] = {{50, 7}, {60, 3}, {70, 0x80}};
+    const core::LegacyCurveMapping mapping = core::curveFromLegacyRows(rows, 3);
+
+    CHECK(!mapping.validation.valid);
+    bool found = false;
+    for (const core::ValidationError& error : mapping.validation.errors) {
+        if (error.code == "descending_command") {
+            found = true;
+        }
+    }
+    CHECK(found);
+}
+
+void testBiosAutomaticMustBeTerminal()
+{
+    noteTest();
+    // A 0x80 row with rows after it would be a curve that hands the fan to the
+    // firmware and then takes it back. The legacy code could be configured that
+    // way; the core refuses it.
+    const core::LegacyCurveRow rows[] = {{50, 0x80}, {70, 3}};
+    const core::LegacyCurveMapping mapping = core::curveFromLegacyRows(rows, 2);
+
+    CHECK(!mapping.validation.valid);
+    bool found = false;
+    for (const core::ValidationError& error : mapping.validation.errors) {
+        if (error.code == "bios_not_terminal") {
+            found = true;
+        }
+    }
+    CHECK(found);
+}
+
+void testTheMappedTableDrivesARealController()
+{
+    noteTest();
+    // The point of the mapping: a mapped legacy table is a curve a Controller
+    // will actually run. This is the T3-05 gate - the table can only be deleted
+    // once something else makes the decision, and this shows what makes it.
+    const std::vector<core::LegacyCurveRow> rows = defaultLegacyTable();
+    const core::LegacyCurveMapping mapping =
+        core::curveFromLegacyRows(rows.data(), rows.size());
+    CHECK(mapping.validation.valid);
+
+    core::ControllerConfig config;
+    config.curve = mapping.config;
+    config.rpmSupported = false;
+    core::Controller controller(config);
+
+    core::CapabilityReport capabilities;
+    capabilities.exactHardwareMatch = true;
+    capabilities.profileVerified = true;
+    capabilities.topologyVerified = true;
+    capabilities.backendReady = true;
+    capabilities.restoreAvailable = true;
+
+    const int expected[] = {0, 3, 5, 7};
+    const int temperatures[] = {50, 56, 61, 66};
+    for (int i = 0; i < 4; ++i) {
+        core::ControllerInput input;
+        input.nowMs = static_cast<std::uint64_t>(1000 * (i + 1));
+        input.capabilities = capabilities;
+        input.requestControl = true;
+        input.temperatures.push_back(validSample(temperatures[i], input.nowMs));
+        // Three consecutive valid readings before control starts: the
+        // controller's own startup gate, not something the mapping changes.
+        core::ControllerOutput output = controller.update(input);
+        output = controller.update(input);
+        output = controller.update(input);
+
+        CHECK(output.commandMayBeIssued);
+        CHECK(output.command.kind == core::CommandKind::Level);
+        CHECK(output.command.level == expected[i]);
+    }
+}
+
+void testTheMappedTableStillNeedsPhaseZero()
+{
+    noteTest();
+    // Mapping the table must not enable anything. Without the Phase 0 verdicts
+    // the controller refuses to issue a command, whatever the curve says - and
+    // the application's own startup path is monitor-only for the same reason.
+    const std::vector<core::LegacyCurveRow> rows = defaultLegacyTable();
+    const core::LegacyCurveMapping mapping =
+        core::curveFromLegacyRows(rows.data(), rows.size());
+
+    core::ControllerConfig config;
+    config.curve = mapping.config;
+    core::Controller controller(config);
+
+    core::ControllerInput input;
+    input.nowMs = 1000;
+    input.capabilities = core::CapabilityReport{};   // nothing verified
+    input.requestControl = true;
+    input.temperatures.push_back(validSample(70, 1000));
+
+    for (int i = 0; i < 5; ++i) {
+        const core::ControllerOutput output = controller.update(input);
+        CHECK(!output.commandMayBeIssued);
+    }
+}
+
+void testARefusalNamesWhatWasAskedForWithoutInventingALevel()
+{
+    noteTest();
+    // A curve request carries no level: the core's curve decides it. Rendering
+    // its placeholder (-1) through the hex formatter would produce 0xFF, and a
+    // fabricated register value in a message a user reads is worse than no
+    // value at all.
+    LegacyIntent smart;
+    smart.source = LegacySource::Smart;
+    smart.level = -1;
+    smart.controlEnabled = false;
+
+    const LegacyDecision smartDecision = core::evaluateIntent(smart, 1000);
+    CHECK(smartDecision.refused);
+    CHECK(smartDecision.message.find("curve control") != std::string::npos);
+    CHECK(smartDecision.message.find("0xFF") == std::string::npos);
+    CHECK(smartDecision.message.find("-1") == std::string::npos);
+
+    // A manual request still names the level it asked for, in hex.
+    LegacyIntent manual = manualIntent(3);
+    manual.controlEnabled = false;
+    const LegacyDecision manualDecision = core::evaluateIntent(manual, 1000);
+    CHECK(manualDecision.refused);
+    CHECK(manualDecision.message.find("0x03") != std::string::npos);
+}
+
+void testDescribeRequestedLevelHandlesACurveRequest()
+{
+    noteTest();
+    LegacyIntent smart;
+    smart.source = LegacySource::Smart;
+    smart.level = -1;
+
+    char buffer[128];
+    CHECK(core::describeRequestedLevel(smart, buffer, static_cast<int>(sizeof(buffer))));
+    CHECK(std::strstr(buffer, "curve control") != nullptr);
+    CHECK(std::strstr(buffer, "0xFF") == nullptr);
+}
+
 void runAll()
 {
     testSpecificFanRequestIsRefused();
@@ -659,6 +957,17 @@ void runAll()
     testForcedMonitorOnlySurvivesEveryVerdict();
     testTheAssessmentNeverDisagreesWithTheCapabilityReport();
     testStartupTextIsAlwaysPopulated();
+    testTheLegacyTableBecomesACoreCurve();
+    testTheEndMarkerStopsTheScan();
+    testATableWithNoEndMarkerIsStillRead();
+    testAnEmptyTableIsRefusedNotDefaulted();
+    testAnUnknownLegacySpecialIsRefusedByValue();
+    testATableTheLegacyScanWouldHaveAppliedIsRefusedWhenUnordered();
+    testBiosAutomaticMustBeTerminal();
+    testTheMappedTableDrivesARealController();
+    testTheMappedTableStillNeedsPhaseZero();
+    testARefusalNamesWhatWasAskedForWithoutInventingALevel();
+    testDescribeRequestedLevelHandlesACurveRequest();
 }
 
 } // namespace

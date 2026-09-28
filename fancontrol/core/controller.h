@@ -99,6 +99,27 @@ public:
     ControllerOutput update(const ControllerInput& input);
     void reset() noexcept;
 
+    // Replaces the temperature curve (T3-04).
+    //
+    // The application lets the user switch between two configured smart
+    // profiles at run time, and the legacy code did the switching by copying
+    // one table over another. The curve the core runs has to follow, or the
+    // selected profile would quietly stop being the one in force - a
+    // behavioural difference introduced by moving the decision into the core,
+    // which is exactly the kind of regression this task must not create.
+    //
+    // The config is installed verbatim and validated by the CurveController
+    // that is built from it. An invalid curve is *not* rejected here and does
+    // not fall back to the previous one: `update` refuses to control while the
+    // curve is invalid, which stops the fan rather than continuing to run a
+    // curve the user has replaced. The returned validation says which rows were
+    // wrong, so the caller can put it in the log.
+    //
+    // This changes thresholds only. Capabilities, the safety state and the
+    // manual override are untouched: the curve is not a safety state, and a
+    // configuration change must never be able to enable control.
+    ValidationResult setCurve(const CurveConfig& config);
+
 private:
     ControllerConfig config_;
     CurveController curve_;
