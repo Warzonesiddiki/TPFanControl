@@ -99,7 +99,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <OutputFile>$(OutDir)core_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)legacy_policy_tests.exe</OutputFile>
       <TargetMachine>MachineX86</TargetMachine>
     </Link>
   </ItemDefinitionGroup>
@@ -117,7 +117,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <OutputFile>$(OutDir)core_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)legacy_policy_tests.exe</OutputFile>
       <TargetMachine>MachineX86</TargetMachine>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
@@ -139,7 +139,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <OutputFile>$(OutDir)core_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)legacy_policy_tests.exe</OutputFile>
       <TargetMachine>MachineX64</TargetMachine>
     </Link>
   </ItemDefinitionGroup>
@@ -157,7 +157,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <OutputFile>$(OutDir)core_tests.exe</OutputFile>
+      <OutputFile>$(OutDir)legacy_policy_tests.exe</OutputFile>
       <TargetMachine>MachineX64</TargetMachine>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
@@ -172,6 +172,7 @@
     <ClCompile Include="..\fancontrol\core\controller.cpp" />
     <ClCompile Include="..\fancontrol\core\app_bridge.cpp" />
     <ClCompile Include="..\fancontrol\core\legacy_policy.cpp" />
+    <ClCompile Include="..\fancontrol\core\ec_access.cpp" />
     <ClCompile Include="..\fancontrol\core\io_backend.cpp" />
     <ClCompile Include="..\fancontrol\core\ec_protocol.cpp" />
   </ItemGroup>
@@ -184,6 +185,7 @@
     <ClInclude Include="..\fancontrol\core\controller.h" />
     <ClInclude Include="..\fancontrol\core\app_bridge.h" />
     <ClInclude Include="..\fancontrol\core\legacy_policy.h" />
+    <ClInclude Include="..\fancontrol\core\ec_access.h" />
     <ClInclude Include="..\fancontrol\core\io_backend.h" />
     <ClInclude Include="..\fancontrol\core\ec_protocol.h" />
   </ItemGroup>

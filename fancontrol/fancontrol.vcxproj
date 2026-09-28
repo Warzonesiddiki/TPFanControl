@@ -367,6 +367,17 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <AdditionalOptions>/permissive- /EHsc /utf-8</AdditionalOptions>
     </ClCompile>
+    <ClCompile Include="core\ec_access.cpp">
+      <!-- T5: the bus configuration and the read-only seam. Split out of
+           ec_protocol.h so that a diagnostic can be handed the configuration
+           without the ability to name EcBus. Read-only by construction, and
+           checked: scripts/check_ecdiag_readonly.py fails the build if the
+           tool's include closure ever reaches a write. -->
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <AdditionalOptions>/permissive- /EHsc /utf-8</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="core\ec_protocol.cpp">
       <!-- T5: the EC transaction layer. Same /W4 /WX treatment as the rest
            of the core, for the same reason: this is the code that decides
@@ -406,6 +417,7 @@
     <ClInclude Include="core\io_backend.h" />
     <ClInclude Include="core\legacy_policy.h" />
     <ClInclude Include="core\legacy_backend.h" />
+    <ClInclude Include="core\ec_access.h" />
     <ClInclude Include="core\ec_protocol.h" />
     <ClInclude Include="core\app_bridge.h" />
   </ItemGroup>

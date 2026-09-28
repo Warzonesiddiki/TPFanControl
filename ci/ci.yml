@@ -251,6 +251,26 @@ jobs:
         # is visible without a machine that has MSBuild.
         run: python3 scripts/check_projects.py
 
+      - name: Every project builds from its own source list
+        # T1-11/T5-09. A Visual Studio project states which sources a binary is
+        # made of, a second time and independently of the portable runner. When
+        # the two disagree the failure appears only on Windows, only at link
+        # time, and only in the job that was supposed to be the verification.
+        #
+        # This compiles each project's own <ClCompile> list with the system
+        # compiler and runs the result, so a missing source fails here instead
+        # of there. The first real run found four of five test projects unable
+        # to link (none of them listed ec_access.cpp, and one had never compiled
+        # the bus it exercises), a duplicate source item, and five projects all
+        # writing core_tests.exe - which is how the executables this workflow
+        # runs came not to exist.
+        #
+        # It is not a Windows build: see the script's own note on what it can
+        # and cannot show.
+        run: |
+          python3 scripts/check_project_sources.py --selftest
+          python3 scripts/check_project_sources.py
+
       - name: The legacy application writes no forbidden EC register
         # T3-11. The legacy SetFan() wrote 0x31, the fan-selector register, four
         # times per attempt and up to five attempts, with no check of any kind.
