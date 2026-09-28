@@ -52,6 +52,43 @@ Control may start only when all conditions are true:
 
 If any condition fails, remain in `MONITOR_ONLY`.
 
+### 4.1 Control is also unreachable at the I/O layer
+
+The startup gate is a decision, and a decision can be coded wrong. There is a
+second, independent barrier below it.
+
+`LegacyBackend`, the only `IIoBackend` the application uses, is constructed
+**read-only**. There is no `makeWritable()`; the one call that makes it read-only
+cannot be undone through the object's public surface (ADR-022). In that state
+every write returns `IoErrorCode::Unsupported` with a message saying the register
+map has not been verified on this machine — not `NotInitialized`, because the
+driver is not the reason, and sending a user to hunt a driver problem that does
+not exist is its own small failure.
+
+The read-only backend reports `BackendState::Ready`, not `Faulted`. It does
+everything monitor-only operation needs, and calling it `Faulted` would suggest
+something is wrong when it is working exactly as configured.
+
+This matters because the two barriers fail differently. A coding error in the
+startup gate produces a command the application believes is authorised. A coding
+error in the I/O layer produces a `Unsupported` that the controller reports and
+fails safe on. Neither is a substitute for the other, and both are required
+before any machine reaches a hardware report.
+
+### 4.2 A refusal is a correct outcome and is shown as one
+
+`evaluateIntent` and `Controller::update` both return refusals, and the
+application reports them in the status line and the trace rather than swallowing
+them or collapsing them into a single "FAILED!!". A refused write, a failed
+write and a failed readback are three different faults with three different
+causes, and the legacy code called all three the same thing — which is part of
+why the fan-selector defect went unnoticed for so long.
+
+The user-visible consequence is that "the core said no" and "the write failed"
+are distinguishable, and that a refusal states plainly that no register was
+written. A refusal that leaves the user guessing whether something happened is
+only half an answer.
+
 ## 5. Normal command gate
 
 Every requested command passes this sequence:

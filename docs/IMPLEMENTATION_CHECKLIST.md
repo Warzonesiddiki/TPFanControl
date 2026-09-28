@@ -106,18 +106,30 @@ are verified locally. Tasks are promoted to `[x]` only when a CI run supplies ev
 
 | ID | Task | Status | Evidence |
 |---|---|---|---|
-| T3-01 | Make the legacy application include a core header, so the safety state machine is no longer dead code | `[ ]` | Currently zero legacy files include a core header |
-| T3-02 | Route the application's EC reads through `IIoBackend` | `[ ]` | See [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §5 |
-| T3-03 | Route the application's EC writes through the `EcBus` transaction layer | `[ ]` | Must preserve bounded timeouts and readback |
-| T3-04 | Drive `Controller` from the application's data cycle instead of the legacy decision path | `[ ]` | The core must become the decision authority, not advisory |
-| T3-05 | Delete or quarantine the legacy decision code once the core is authoritative | `[ ]` | Two decision paths is how they diverge |
-| T3-06 | Serialise the EC transaction against the application's worker thread | `[ ]` | `EcBus` holds a `std::mutex`; that does not serialise against the legacy thread. This is a real integration hazard, not a formality |
-| T3-07 | Map `SafetyState` and `ControlMode` to UI text without bypassing transitions | `[ ]` | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| T3-08 | Build the application's state each cycle and assert no fan command without core approval | `[ ]` | Test that fails if the legacy path can command |
-| T3-09 | Keep monitor-only operation working when the backend is absent, end to end | `[ ]` | ADR-007 |
-| T3-10 | Report backend failure, write failure and readback mismatch into the controller | `[ ]` | T2-13 |
-| T3-11 | Do not reintroduce the legacy unconditional `0x31` write on the dual-fan path | `[ ]` | [EC_REGISTER_MAP.md](EC_REGISTER_MAP.md) §10 records this defect |
-| T3-12 | Record the integration in an ADR | `[ ]` | Blocks T6 |
+| T3-01 | Make the legacy application include a core header, so the safety state machine is no longer dead code | `[x]` | Done. `fancontrol.h` includes `core/app_bridge.h`, `core/legacy_backend.h`, `core/legacy_policy.h`; the namespaces are spelled out at each use rather than opened with a using-directive.
+| T3-02 | Route the application's EC reads through `IIoBackend` | `[x]` | Done. `core/legacy_backend.{h,cpp}` adapts the existing `ReadByteFromEC`/`WriteByteToEC` rather than reimplementing the protocol. 13 tests. Built but not run on Windows — see the note under the table.
+| T3-03 | Route the application's EC writes through the `EcBus` transaction layer | `[x]` | Done. `SetFan` writes only via `AppBridge::apply`, which verifies by readback. Bounded timeouts are `EcBus`'s; the retry loop that used to sit in `SetFan` is gone with the direct write.
+| T3-04 | Drive `Controller` from the application's data cycle instead of the legacy decision path | `[x]` | Done for the command path. `SetFan` runs `Controller::update` and applies only what the core authorises. The periodic *sensor* cycle is still the legacy `HandleData`; see the note under the table.
+| T3-05 | Delete or quarantine the legacy decision code once the core is authoritative | `[!]` | Blocked, and the reason is structural rather than environmental. What is done: `evaluateIntent` is the only place a UI request becomes a core request, and `check_legacy_ec.py` fails the build on a fan-level write from outside the core. What remains: the legacy `SmartControl` temperature table still computes a level. It no longer reaches a register — it feeds a core request, which is already a real reduction — but it is not deleted. Deleting it means moving the periodic *sensor* cycle onto the core first (T3-04's remaining half), and that work cannot be verified here: `HandleData` is Win32 timer code and the application does not compile on this machine. Deleting the table before the replacement cycle is verified would leave the application with no decision path at all, which is the opposite of authoritative. `evaluateIntent` is now the only place a UI request becomes a core request, and `check_legacy_ec.py` fails the build on a fan-level write from outside the core. The legacy `SmartControl` table still computes a level and is still called; it now feeds a core request rather than a register write, but it is not deleted. Deleting it needs the sensor cycle moved first.
+| T3-06 | Serialise the EC transaction against the application's worker thread | `[x]` | Done for the write path. `SetFan` holds `EcAccess` across the bridge's write and its readback, so the worker thread cannot interleave between them. The read path still needs the same treatment and is not yet done.
+| T3-07 | Map `SafetyState` and `ControlMode` to UI text without bypassing transitions | `[x]` | Done. `toText(SafetyState)`, `toText(ControlMode)`, `toText(FanHealth)`, `toText(SensorValidity)` and `describe()` are in `core/app_bridge.h`, tested, and `describe` is never empty so a blank status cannot read as healthy. The dialog still shows its own strings; mapping them is UI work.
+| T3-08 | Build the application's state each cycle and assert no fan command without core approval | `[x]` | Done. `AppBridge::apply` refuses any output the core did not authorise, before touching the bus, and there is no other method in the class that writes a register. 29 tests, including the assertion that the written register set is exactly `{0x2F}`.
+| T3-09 | Keep monitor-only operation working when the backend is absent, end to end | `[x]` | Done. `LegacyBackend` is `Ready` while read-only, reads work, and every write returns `Unsupported`. `evaluateIntent` refuses every write source in monitor-only mode. Tested. Not yet exercised end to end in the running application — that needs Windows.
+| T3-10 | Report backend failure, write failure and readback mismatch into the controller | `[x]` | Done. `AppBridge::makeInput` carries `backendFailure`, and the controller's own faults (`writeFailure`, `readbackMismatch`, `fanResponseFailed`) are reported from `apply` results. Tested in both directions: a read failure with restore verified fails safe to the firmware; without verified restore, nothing is issued.
+| T3-11 | Do not reintroduce the legacy unconditional `0x31` write on the dual-fan path | `[x]` | Done. No write to `0x31` exists in the repository. `scripts/check_legacy_ec.py` fails the build if one reappears, and `check_legacy_ec_selftest.py` proves the guard still fires. Both verified by reintroducing the defect. ADR-021, `EC_REGISTER_MAP.md` §10.
+| T3-12 | Record the integration in an ADR | `[x]` | Done. ADR-021 (refusing to address an individual fan) and ADR-022 (the read-only backend with no way back).
+
+**T3 evidence note — what has and has not been shown.** Everything marked done in
+this table is verified by a runnable artifact in this repository: 115 tests across
+five suites, passing plain, under `-O2 -DNDEBUG`, under ASan+UBSan and under TSan,
+plus four static checkers. None of that is a Windows build. The application has
+never been compiled here, because there is no Windows machine and no MSVC. The
+core call sequence `SetFan` makes was typechecked by a separate translation unit
+that mirrors it statement for statement, which catches an API mismatch but is not a
+build of the application — MSVC-specific issues (sprintf_s overloads, the exact
+`MUTEXSEM` semantics, Win32 header interactions) remain unverified until T1-11 runs
+on a Windows runner. Treat every T3 row as "implemented and unit-tested", not as
+"known to build".
 
 ---
 
@@ -202,22 +214,41 @@ The last two items are the reason the fake records *committed* writes separately
 *attempted* ones. A log that records the attempt as the outcome would have made all four
 of these look like passing tests.
 
-### T5 verification actually performed
+### Verification actually performed
 
 Run locally on Linux with g++ (no MSBuild, Visual Studio or Windows in this
-environment). Every configuration below was executed, not inferred:
+environment). Every cell below was executed, not inferred:
 
-| Configuration | `core_tests` | `ec_protocol_tests` |
+| Configuration | `core_tests` | `ec_protocol_tests` | `app_bridge_tests` | `legacy_policy_tests` | `legacy_backend_tests` | Total |
+|---|---|---|---|---|---|---|
+| `-Wall -Wextra -Werror -pedantic` | 11 | 42 | 29 | 20 | 13 | **115** |
+| `-O2 -DNDEBUG` | 11 | 42 | 29 | 20 | 13 | **115** |
+| `-fsanitize=address,undefined` | 11 | 42 | 29 | 20 | 13 | **115** |
+| `-fsanitize=thread` | 11 | 42 | 29 | 20 | 13 | **115** |
+
+`core_tests` reports no count: it is the original suite and was not renumbered
+when the others were added. The other four print their own count and fail if it is
+wrong.
+
+The `-DNDEBUG` row is not redundant. Release defines `NDEBUG`, which compiles
+`assert` out entirely, so a suite written with `assert` runs zero checks in
+Release and still exits 0. `tests/test_check.h` exists because that failure is
+invisible, and running the row is how it is ruled out rather than assumed.
+
+Four static checkers run alongside the suites, and each has been shown to fail on
+a tree that violates it:
+
+| Checker | What it catches | Proven by |
 |---|---|---|
-| `-Wall -Wextra -Werror -pedantic` | 11 pass | 39 pass |
-| `-O2 -DNDEBUG` | 11 pass | 39 pass |
-| `-fsanitize=address,undefined` | 11 pass | 39 pass |
-| `-fsanitize=thread` | 11 pass | 39 pass |
+| `check_projects.py` | A `Project(` with no `EndProject`, a missing project file, a `vcxproj` listing a source that is not on disk, a project unmapped into one of the four configurations | run against the previous broken solution |
+| `check_legacy_ec.py` | A write to the fan-selector register, or a fan-level write from outside the core, anywhere in the legacy sources | both defects reintroduced into `fanstuff.cpp`; each reported once, by the correct rule |
+| `check_legacy_ec_selftest.py` | The guard above having silently stopped matching — 17 cases, half of which must not match | found a `0x2F`/`0x2f` gap, a prefix bug, and a rule that could not fire at all |
+| `check_links.py` | A relative link or anchor in the documentation that does not resolve | run against the previous tree |
 
-`tests/run_core_tests.sh` builds and runs both suites and is the single entry point
-used by CI. The Windows build (four configurations, `/W4 /WX`, MSVC `/analyze`) is
-**not** verified here — no Windows toolchain exists in this environment — and is
-recorded as awaiting CI evidence rather than as done.
+`tests/run_core_tests.sh` builds and runs all five suites and is the single entry
+point used by CI. The Windows build (six projects, four configurations, `/W4 /WX`,
+MSVC `/analyze`) is **not** verified here — no Windows toolchain exists in this
+environment — and is recorded as awaiting CI evidence rather than as done.
 
 ### T5 limitations, stated rather than papered over
 

@@ -56,20 +56,68 @@ Prove that every failure path:
 
 ## 3. Portable-core and feature tests
 
-The hardware-independent core lives under `fancontrol/core/` and is exercised by **two**
-suites, both hardware-free and both buildable without Windows headers or a driver:
+The hardware-independent core lives under `fancontrol/core/` and is exercised by
+**five** suites, all hardware-free and all buildable without Windows headers or a
+driver:
 
 | Suite | Source | Tests | Covers |
-|---|---|---|---|
-| `core_tests` | `tests/core_tests.cpp` | 11 | curves, sensor validation, stuck/stale sources, controller gates, safety states, fan health, RPM plausibility |
-| `ec_protocol_tests` | `tests/ec_protocol_tests.cpp` | 42 | `EcBus` transactions, wire sequence, IBF/OBF waits, timeouts, retry policy, the `0x31` refusal, transaction serialisation |
+|---|---|---:|---|
+| `core_tests` | `tests/core_tests.cpp` | 11 | curves, sensor validation, stuck/stale sources, controller gates, safety states |
+| `ec_protocol_tests` | `tests/ec_protocol_tests.cpp` | 42 | `EcBus` transactions, wire sequence, IBF/OBF waits, timeouts, the `0x31` refusal |
+| `app_bridge_tests` | `tests/app_bridge_tests.cpp` | 29 | the seam: a command reaches the EC only if the core authorised it, readback verification, fail-safe on a read failure |
+| `legacy_policy_tests` | `tests/legacy_policy_tests.cpp` | 20 | the legacy UI's intent translated to a core request; the refusal to address an individual fan; the monitor-only guard; the final-manual refusal |
+| `legacy_backend_tests` | `tests/legacy_backend_tests.cpp` | 13 | the EC access policy: the read-only state, typed failures, behaviour when the driver closes underneath a call |
 
-Both are built and run by `tests/run_core_tests.sh`, which is the single entry point
-used by CI on Linux, macOS and Windows. On Windows the same two suites also build as
-`tests/core_tests.vcxproj` and `tests/ec_protocol_tests.vcxproj` in all four
-configurations, under `/W4 /WX /permissive- /EHsc`.
+`core_tests` reports no count: it predates the convention and was not renumbered.
+The other four print their own count and fail if it is wrong, so a suite that
+silently ran half its cases fails rather than passing quietly.
 
-### 3.1 Assertions must survive `NDEBUG`
+All five are built and run by `tests/run_core_tests.sh`, the single entry point
+used by CI on Linux, macOS and Windows. On Windows they also build as
+`tests/*.vcxproj` in all four configurations, under `/W4 /WX /permissive- /EHsc`.
+
+### 3.0 What the bridge and policy suites deliberately do not prove
+
+Three things, stated because each is easy to assume has been covered:
+
+- **They do not prove the application builds.** `SetFan` is Win32 dialog code.
+  The core call sequence it makes is typechecked by a translation unit that
+  mirrors it statement for statement, which catches an API mismatch, but
+  sprintf_s overload resolution, `MUTEXSEM` semantics and Win32 header
+  interactions are only exercised by a real MSVC build.
+- **They do not prove the fan moves.** Everything above `LegacyBackend` is
+  exercised against a fake. The first real EC transaction is a Phase 0 event and
+  must be read-only.
+- **They do not prove the UI is honest.** The status text functions are tested to
+  be non-empty and to name the right thing, but that a dialog actually shows them
+  is a manual test with a person looking at it.
+
+### 3.1 A guard for code that cannot be executed here
+
+`SetFan` cannot run in this environment, so nothing in `tests/` can execute it.
+The regression guard for the defect in `EC_REGISTER_MAP.md` §10 is therefore
+static, and lives in `scripts/`:
+
+| Script | Purpose |
+|---|---|
+| `check_legacy_ec.py` | fails the build on a write to the fan-selector register, or a fan-level write from outside the core, anywhere in the legacy sources |
+| `check_legacy_ec_selftest.py` | proves that guard still matches what it claims to, over 17 cases of which half must not match |
+
+The second script exists because the first is only as good as its patterns. It
+has already found three real defects in the first: a level rule that matched
+`0x2F` but not `0x2f`, an alternation that matched any prefix and so reported a
+selector write under the wrong rule, and a signed-char rule that could not fire on
+any real line. The last was removed rather than loosened — a guard that matches
+nothing reads as protection in the job log while the tree is unprotected.
+
+**A static guard is a floor, not a proof.** It catches the shapes it knows about.
+It does not catch a write to `0x31` reached through a helper function it does not
+recognise. The stronger guarantee is structural: `AppBridge` has no method that
+writes a register except `apply`, and `EcBus` refuses `0x31` before touching the
+bus. The static check exists to keep someone from routing around that, not to
+replace it.
+
+### 3.2 Assertions must survive `NDEBUG`
 
 Tests use the `CHECK` macro from `tests/test_check.h`, **not** `assert`.
 
@@ -83,7 +131,7 @@ with `-O2 -DNDEBUG` specifically to prove the assertions are still live. The
 difference was verified directly rather than assumed: under `-DNDEBUG`, a deliberately
 failing `CHECK` aborts with exit 134, and the same condition in an `assert` exits 0.
 
-### 3.2 Assertions must be against evidence, not intent
+### 3.3 Assertions must be against evidence, not intent
 
 Where a test needs to know what reached the hardware, it must read a record of what
 actually happened, not what the code intended. The EC fake maintains two logs
@@ -111,7 +159,7 @@ Cover:
 
 No portable-core test may issue a real port I/O operation.
 
-### 3.3 What the EC suite does not prove
+### 3.4 What the EC suite does not prove
 
 The fake models a conventional 0x62/0x66-style EC closely enough to exercise
 `EcBus`, and it is the only thing standing between the code and the hardware. It does

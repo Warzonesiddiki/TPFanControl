@@ -385,3 +385,107 @@ been softened by the fact that the numbers now come from our own source.
 **Revisit conditions.** Superseded by Phase 0 measurement. The defaults should be
 replaced by whatever `ecdiag` (T5-09) actually observes, and this ADR updated with
 the measurement rather than with an inference from the legacy source.
+
+## ADR-021 — Refuse to address an individual fan rather than approximate it
+
+**Status.** Accepted, T3. T3-11.
+
+**Context.** The legacy UI let the user choose fan 1 or fan 2, and implemented that
+choice by writing the fan-selector register `0x31` — up to four times per attempt,
+five attempts, on every cycle. `0x31` is widely described as the fan selector and
+is verified for nothing; the register map's evidence table has no row for it.
+`EC_REGISTER_MAP.md` §10 records the defect and what removing it costs.
+
+T3-11 requires the write to be gone. The question this ADR answers is what the
+application does instead when a caller still asks for a specific fan.
+
+**Options considered.**
+
+1. *Ignore the request and apply the level to the selected fan.* Zero new code, and
+   the status line would show `OK`. Rejected: on a two-fan machine the two fans may
+   be different hardware with different thermal limits, and the user would have
+   asked for a level on one of them specifically. Reporting success for an action
+   that did not happen is the specific failure mode that made this defect hard to
+   see in the first place.
+
+2. *Keep `0x31` behind a configuration flag.* The write is preserved and simply
+   defaulted off. Rejected: a class or flag whose safety depends on nobody enabling
+   it is a weaker guarantee than one that cannot do the thing. The rest of this
+   codebase is built on the opposite principle — `EcBus` refuses `0x31` before I/O
+   and the T14 profile never opts in, and there is no setting that turns that on.
+
+3. *Refuse, and say which fan was asked for.* More code, and the user sees an
+   error where they used to see a success. Accepted.
+
+**Decision.** `LegacyFanTarget` has exactly one writable value,
+`FirmwareSelected`, which means "the fan the firmware has already selected" and
+requires no selector write. `FirstFan` and `SecondFan` exist so the refusal can
+name the fan that was asked for. `evaluateIntent` refuses them with
+`SpecificFanNotSupported`, and the message says that no register was written —
+because a refusal that leaves the user guessing whether something happened is
+only half an answer.
+
+`AppBridge` has no code path that can write `0x31`, and `EcBus` refuses the
+register before touching the bus. Re-enabling selector writes requires a Phase 0
+hardware report establishing what `0x31` is on this machine, and then the full
+§9 change-control list: profile version, regression test, documented rollback,
+second reviewer.
+
+**Consequences.**
+
+- The per-fan feature is gone from the UI until a machine is verified. This is a
+  real functional loss and is recorded as one rather than presented as a fix.
+- The single-fan path is the one with test coverage, which is the path the T14
+  profile uses. The uncovered path is the one that would need hardware evidence
+  first.
+- The refusal is a *decision*, not an error: it has its own enum value, its own
+  text, and its own tests, and the UI can style it differently from a failed write.
+
+**Revisit conditions.** A Phase 0 hardware report that establishes the meaning of
+`0x31` and the fan topology on the target machine, plus the §9 change control.
+
+## ADR-022 — The EC backend is read-only by default, with no way back
+
+**Status.** Accepted, T3. T3-02, T3-09.
+
+**Context.** T3-02 routes the application's EC access through `IIoBackend`.
+`LegacyBackend` adapts the application's existing `ReadByteFromEC` and
+`WriteByteToEC` rather than reimplementing the two-phase protocol (ADR-020), so
+the portable core drives the same code path the legacy application always used.
+
+That leaves a question the portable core does not otherwise have to answer: when
+is a write permitted at all? Today the answer is "whenever the code path gets
+there". On an unverified machine, `0x2F` and `0x31` are candidates, not
+measurements, and a write is how a candidate becomes a change to someone's
+embedded controller.
+
+The obvious design is a flag. The alternative is a state the object cannot leave.
+
+**Decision.** `LegacyBackend` has `makeReadOnly()`. It does **not** have
+`makeWritable()`. Once read-only, a write fails with `IoErrorCode::Unsupported`
+and a message saying the register map has not been verified on this machine —
+not `NotInitialized`, because the driver state is not the reason and sending a
+user to look for a driver problem that does not exist is its own small failure.
+
+`CoreInit` calls `makeReadOnly()`, and that is the single line to change when a
+machine is verified. It is a line in source, in the same commit as the hardware
+report, where a reviewer sees it — not a setting in a config file, which is where
+an enabling change is hardest to notice and easiest to ship.
+
+The read-only backend is `BackendState::Ready`, not `Faulted`. It does everything
+monitor-only operation needs, and calling it `Faulted` would suggest something is
+wrong when it is in fact working exactly as configured (ADR-007, T3-09).
+
+**Consequences.**
+
+- Control cannot be enabled on any machine until Phase 0 completes, by
+  construction. That is the intended state, not a limitation to work around.
+- The independent capability report is unchanged: even with a writable backend, the
+  Phase 0 verdicts in `CapabilityReport` are what make control ineligible, so
+  there are two separate barriers and neither is a UI setting.
+- Enabling control on a verified machine is a code change and gets reviewed like
+  one.
+
+**Revisit conditions.** Never for the absence of `makeWritable()`. If a future
+need requires a writable backend on a machine that is not verified, that need
+should be treated as a safety defect, not a feature.

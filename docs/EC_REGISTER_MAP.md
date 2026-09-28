@@ -167,6 +167,85 @@ enabled, Phase 0 must establish by **read-only** measurement:
 | timeout and poll budget | 50 ms / 1 ms | a bound that is too long delays failsafe; too short causes spurious fallbacks |
 
 None of these may be probed by writing to an unknown register. The legacy application
-already contains the defect recorded in §10 — an unconditional write to the fan-selector
+contained the defect recorded in §10 — an unconditional write to the fan-selector
 register — and repeating that pattern during discovery is exactly what this project
-exists to avoid. T3-11 must not reintroduce it.
+exists to avoid. T3-11 must not reintroduce it. See also §10.1.
+
+## 10. The unconditional fan-selector write (resolved in T3)
+
+`0x31` is widely described as the fan-selector register: writing `0x00` addresses
+fan 1, writing `0x01` addresses fan 2, and the fan-level register `0x2F` then
+applies to whichever was selected. That description is plausible, widely repeated,
+and **not verified for this machine** — it is in none of the rows of the §8
+evidence table, and this project has taken no measurement of it.
+
+The legacy `FANCONTROL::SetFan` relied on it completely. One call did this, up to
+five times:
+
+| Step | Write | Purpose |
+|---:|---|---|
+| 1 | `0x31` ← `0x00` | select fan 1 |
+| 2 | `0x2F` ← level | set the level |
+| 3 | `0x31` ← `0x01` | select fan 2 |
+| 4 | `0x2F` ← level | set the same level on fan 2 |
+| 5 | read `0x2F` | verify |
+| 6 | `0x31` ← `0x00` | select fan 1 again |
+| 7 | read `0x2F` | verify |
+
+That is four writes to `0x31` per attempt, so **up to twenty writes to an
+unverified register from a single UI click**, none of them conditional on
+anything. The consequences if `0x31` is not the fan selector on a given model:
+
+- the writes land on some other register of the embedded controller, whose
+  meaning is unknown, and there is no way to find out which;
+- the damage is not visible in the application's own state, so nothing reports
+  it;
+- it happened on every cycle, not only on a settings change, because
+  `SmartControl` calls `SetFan` whenever its computed level changes;
+- the retries multiplied the exposure, so a machine where the writes *did*
+  something visible was the case where the user did the most damage.
+
+`docs/EC_REGISTER_MAP.md` §4 lists `0x31` nowhere. That is not an oversight; see
+§10.1.
+
+### 10.1 What replaced it, and why refusing is the right answer
+
+`0x31` is no longer written by any code in this repository. The fan level is
+written only to `0x2F`, which applies to the fan the **firmware** has already
+selected. Three things follow, and the third is the important one.
+
+1. **Addressing a specific fan is refused, not approximated.** The legacy UI let
+   the user pick fan 1 or fan 2. Honouring that needs the `0x31` write. With it
+   gone, the only alternatives were to silently apply the level to the other fan,
+   or to say no. Silently applying it would report success for an action that
+   did not happen, on a machine where the two fans may be different hardware
+   with different thermal limits. So `LegacyFanTarget::FirstFan` and
+   `SecondFan` are refused with a message naming the fan that was asked for.
+
+2. **The refusal is permanent until Phase 0 says otherwise, and Phase 0 has not
+   said.** `EcBus` has a `setFanSelectorWritesAllowed` opt-in, and the T14
+   single-fan profile never calls it. `AppBridge` has no code path that can.
+   Enabling selector writes requires a hardware report establishing what `0x31`
+   is on this machine, a profile version bump, a regression test, and a
+   documented rollback — the §9 change-control list, in full.
+
+3. **A removal with no guard is a removal that comes back.** `SetFan` is Win32
+   dialog code. No test in `tests/` can execute it and this repository is
+   developed on Linux, so the regression guard is static:
+   `scripts/check_legacy_ec.py` fails the build if a write to the fan-selector
+   register, or a fan-level write from outside the core, reappears anywhere in
+   the legacy sources. `scripts/check_legacy_ec_selftest.py` proves that guard
+   still matches what it claims to, because a guard that has silently stopped
+   matching reports a clean tree and a green job.
+
+### 10.2 What is still unverified
+
+| Item | Status | Why it is not assumed |
+|---|---|---|
+| Meaning of `0x31` | Unknown | Widely described, never measured. §8 has no row for it. |
+| Whether `0x2F` is the fan level | Candidate | §2, §4. Needs a read-only Phase 0 report. |
+| Fan topology (one fan or two) | Unknown | §8. Determines whether a selector is needed at all. |
+| Whether `0x2F` applies to the selected fan | Assumption | The whole model in §10.1 rests on it. |
+
+None of these may be resolved by writing to `0x31` to see what happens. That is
+the defect.
