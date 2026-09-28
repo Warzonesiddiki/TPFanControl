@@ -26,6 +26,20 @@
 #include "winstuff.h"
 #include "TaskbarTextIcon.h"
 
+// T3-01. The application now includes core headers, so the portable safety
+// state machine and the fan-selector refusal rule are no longer dead code that
+// the shipped program never sees. The namespace is spelled out at every use
+// site rather than opened with a using-directive: a global "using namespace"
+// in a header of this size would be the kind of change that silently alters
+// name lookup in every file that includes it.
+#include "core/app_bridge.h"
+#include "core/legacy_backend.h"
+#include "core/legacy_policy.h"
+
+#include <memory>
+#include <string>
+#include <vector>
+
 
 
 #define FANCONTROLVERSION "0.63 multiHotKey"
@@ -174,6 +188,52 @@ class FANCONTROL
 		MUTEXSEM EcAccess;
 		bool m_needClose;
 
+		// T3-01/T3-02/T3-04. The portable core, owned by the application.
+		//
+		// Held by pointer and created only after the port driver is open,
+		// because the backend wraps the driver's read and write primitives and
+		// must not outlive them. Created read-only unless Phase 0 has verified
+		// this machine; see CoreInit.
+		//
+		// Every EC access in the application goes through here. That is the
+		// point: the legacy code had several paths that each talked to the EC
+		// under EcAccess independently, and a change to one did not change the
+		// others.
+		std::unique_ptr<tpfancontrol::core::LegacyBackend> CoreBackend;
+		std::unique_ptr<tpfancontrol::core::AppBridge> CoreBridge;
+
+		// T3-04. The monotonic clock the core runs on. A member rather than a
+		// function-local static, and declared before CoreBridge so it is
+		// destroyed after it: members are destroyed in reverse declaration
+		// order, and a bridge outliving the clock it reads would be a
+		// use-after-free on shutdown.
+		//
+		// SteadyClock, never the wall clock. A wall-clock step backwards during
+		// NTP correction must not turn a bounded EC wait into an unbounded one.
+		tpfancontrol::core::SteadyClock CoreClock;
+
+		// T5/Phase 0. Whether this machine has a verified hardware report. False
+		// everywhere until one exists, and the single thing that decides whether
+		// the core may control the fan. See CoreInit.
+		bool CoreHardwareVerified = false;
+
+		// The reason code from the core's last decision, for the status line and
+		// the trace. Empty means the core has not run yet, which is different
+		// from a decision with no reason, so it is a string and not a flag.
+		std::string LastCoreReason;
+
+		// Builds CoreBackend and CoreBridge against the current EC primitives.
+		// Returns false if the port driver is not open, in which case the
+		// application runs monitor-only and writes nothing.
+		bool CoreInit();
+		// Releases them. Called when the port driver closes, so nothing can call
+		// through a closed driver.
+		void CoreShutdown();
+		// The application's sensor names in register order, 0x78 first then
+		// 0xC0. Returns exactly kSensorCount entries, with empty names for
+		// sensors this machine does not have.
+		std::vector<std::string> CoreSensorNames() const;
+
 		char Title[128];
 		char Title2[128];
 		char Title3[128];
@@ -213,7 +273,22 @@ class FANCONTROL
 		int ReadEcRaw(FCSTATE *pfcstate);
 		int HandleData();
 		int SmartControl();
-		int SetFan(const char *source, int level, BOOL final= false);
+		// T3-11. The target fan is a parameter rather than something SetFan
+		// works out for itself, and the only writable value is
+		// FirmwareSelected. The legacy signature took a `const char *source` and
+		// compared it by pointer identity, which is undefined behaviour unless
+		// every argument is a literal in this translation unit; it worked only by
+		// accident. An enum cannot be compared wrongly.
+		//
+		// SetFan does not write any register itself. It asks the portable core
+		// for an authorised command and applies it, so there is exactly one place
+		// where a fan level reaches the EC and exactly one decision path.
+		int SetFan(
+			tpfancontrol::core::LegacySource source,
+			int level,
+			tpfancontrol::core::LegacyFanTarget target
+				= tpfancontrol::core::LegacyFanTarget::FirmwareSelected,
+			BOOL final= false);
 		int SetHdw(const char *source, int hdwctrl, int HdwOffset, int AnyWayBit);
 
 

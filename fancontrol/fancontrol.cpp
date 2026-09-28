@@ -1240,7 +1240,8 @@ switch (msg) {
 
 
 									// don't close if we can't set the fan back to bios controlled
-									if (!this->ActiveMode || this->SetFan("On close", 0x80, true)) {
+									if (!this->ActiveMode || this->SetFan(tpfancontrol::core::LegacySource::Shutdown, 0x80,
+									 tpfancontrol::core::LegacyFanTarget::FirmwareSelected, true)) {
 										::KillTimer(this->hwndDialog, m_fanTimer);
 										::KillTimer(this->hwndDialog, m_titleTimer);
 										::KillTimer(this->hwndDialog, m_iconTimer);
@@ -1290,7 +1291,8 @@ switch (msg) {
 
 
 									// don't close if we can't set the fan back to bios controlled
-									if (!this->ActiveMode || this->SetFan("On close", 0x80, true)) {
+									if (!this->ActiveMode || this->SetFan(tpfancontrol::core::LegacySource::Shutdown, 0x80,
+									 tpfancontrol::core::LegacyFanTarget::FirmwareSelected, true)) {
 										::KillTimer(this->hwndDialog, m_fanTimer);
 										::KillTimer(this->hwndDialog, m_titleTimer);
 										::KillTimer(this->hwndDialog, m_iconTimer);
@@ -1364,7 +1366,7 @@ switch (msg) {
 					// after so many consecutive read errors, try to switch back to bios mode
 					if (this->ReadErrorCount > this->MaxReadErrors) {
 						this->ModeToDialog(1);
-						ok= this->SetFan("Max. Errors", 0x80);
+						ok= this->SetFan(tpfancontrol::core::LegacySource::Failsafe, 0x80);
 						if (ok) {
 							this->Trace("Set to BIOS Mode, to many consecutive read errors");
 							::Sleep(2000);

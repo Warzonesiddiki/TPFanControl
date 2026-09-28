@@ -2,8 +2,8 @@
 
 # Tasks covered:
 #   T1-08  portable core tests on Linux, macOS and Windows
-#           (all three suites: core_tests, ec_protocol_tests and
-#            app_bridge_tests)
+#           (all six suites: core_tests, ec_protocol_tests, app_bridge_tests,
+#            legacy_policy_tests and legacy_backend_tests)
 #   T1-09  Release build with warnings-as-errors on the core
 #   T1-10  git diff --check and a link check
 #   T1-11  Windows test target
@@ -52,12 +52,17 @@ jobs:
           BUILD_DIR="${TMPDIR:-/tmp}/tpfancontrol-core-san"
           mkdir -p "$BUILD_DIR"
           CXX="${CXX:-g++}"
-          for suite in core_tests ec_protocol_tests app_bridge_tests; do
-            if [ "$suite" = core_tests ]; then
-              FAKE=tests/fake_backend.cpp
-            else
-              FAKE=tests/fake_ec.cpp
-            fi
+          for suite in core_tests ec_protocol_tests app_bridge_tests \
+                       legacy_policy_tests legacy_backend_tests; do
+            # core_tests uses the fake backend; the EC suites use the fake EC.
+            # legacy_policy_tests and legacy_backend_tests supply their own
+            # doubles inline, so they have no fake to compile in - and passing
+            # an empty source is clearer than passing a file they do not use.
+            case "$suite" in
+              core_tests)                            FAKE=tests/fake_backend.cpp ;;
+              legacy_policy_tests|legacy_backend_tests) FAKE=/dev/null ;;
+              *)                                     FAKE=tests/fake_ec.cpp ;;
+            esac
             # ec_protocol_tests and app_bridge_tests use std::thread for the transaction
             # serialisation tests, so a threading library is linked in.
             "$CXX" -std=c++17 -Wall -Wextra -Werror -pedantic \
@@ -75,12 +80,17 @@ jobs:
           # and an assert-based suite built with NDEBUG runs zero checks and
           # still exits 0, so this is verified rather than assumed.
           # See tests/test_check.h.
-          for suite in core_tests ec_protocol_tests app_bridge_tests; do
-            if [ "$suite" = core_tests ]; then
-              FAKE=tests/fake_backend.cpp
-            else
-              FAKE=tests/fake_ec.cpp
-            fi
+          for suite in core_tests ec_protocol_tests app_bridge_tests \
+                       legacy_policy_tests legacy_backend_tests; do
+            # core_tests uses the fake backend; the EC suites use the fake EC.
+            # legacy_policy_tests and legacy_backend_tests supply their own
+            # doubles inline, so they have no fake to compile in - and passing
+            # an empty source is clearer than passing a file they do not use.
+            case "$suite" in
+              core_tests)                            FAKE=tests/fake_backend.cpp ;;
+              legacy_policy_tests|legacy_backend_tests) FAKE=/dev/null ;;
+              *)                                     FAKE=tests/fake_ec.cpp ;;
+            esac
             "$CXX" -std=c++17 -O2 -DNDEBUG -Wall -Wextra -Werror -pedantic \
               -I fancontrol/core -I tests \
               fancontrol/core/*.cpp \
@@ -127,6 +137,8 @@ jobs:
           out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\core_tests.exe
           out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\ec_protocol_tests.exe
             out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\app_bridge_tests.exe
+            out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\legacy_policy_tests.exe
+            out\tests\${{ matrix.platform }}\${{ matrix.configuration }}\legacy_backend_tests.exe
 
       - name: Upload build log
         if: always()
@@ -146,7 +158,9 @@ jobs:
 
       - name: Build Release test targets with warnings-as-errors
         run: >
-          msbuild tests\core_tests.vcxproj tests\ec_protocol_tests.vcxproj tests\app_bridge_tests.vcxproj
+          msbuild tests\core_tests.vcxproj tests\ec_protocol_tests.vcxproj
+                        tests\app_bridge_tests.vcxproj tests\legacy_policy_tests.vcxproj
+                        tests\legacy_backend_tests.vcxproj
           /m
           /p:Configuration=Release
           /p:Platform=x64
@@ -162,6 +176,8 @@ jobs:
           out\tests\x64\Release\core_tests.exe
           out\tests\x64\Release\ec_protocol_tests.exe
             out\tests\x64\Release\app_bridge_tests.exe
+            out\tests\x64\Release\legacy_policy_tests.exe
+            out\tests\x64\Release\legacy_backend_tests.exe
 
       - name: Confirm the core really was compiled with /W4 and /WX
         # Guards against the flag silently not being applied, which would make
@@ -170,7 +186,7 @@ jobs:
         shell: pwsh
         run: |
           $log = Get-Content build-core-wx.log -Raw
-          $coreUnits = @('core_types', 'sensor_validation', 'fan_curve', 'controller', 'io_backend', 'ec_protocol', 'app_bridge')
+          $coreUnits = @('core_types', 'sensor_validation', 'fan_curve', 'controller', 'io_backend', 'ec_protocol', 'app_bridge', 'legacy_policy', 'legacy_backend')
           $fail = @()
           foreach ($u in $coreUnits) {
             $lines = $log -split "`r?`n" | Where-Object { $_ -match "$u\.cpp" -and $_ -match '\bcl\.exe\b|compiler' }
@@ -220,6 +236,24 @@ jobs:
         # produces a build that is less than it appears to be, and none of them
         # is visible without a machine that has MSBuild.
         run: python3 scripts/check_projects.py
+
+      - name: The legacy application writes no forbidden EC register
+        # T3-11. The legacy SetFan() wrote 0x31, the fan-selector register, four
+        # times per attempt and up to five attempts, with no check of any kind.
+        # Those lines are removed, but nothing here can execute the function: it
+        # is Win32 dialog code, and no test in tests/ runs it. So the regression
+        # guard is static, and this is it.
+        #
+        # It also forbids a fan-level write from outside the core, which is what
+        # stops the same write coming back through a different door.
+        #
+        # The self-test runs first and proves the guard still matches what it
+        # claims to. A guard whose patterns have silently stopped matching
+        # reports a clean tree and a green job, which is worse than having no
+        # guard at all.
+        run: |
+          python3 scripts/check_legacy_ec_selftest.py
+          python3 scripts/check_legacy_ec.py
 
       - name: Shell scripts start with a clean shebang
         # A UTF-8 BOM is invisible in an editor and fatal to /bin/sh: the kernel
@@ -284,7 +318,9 @@ jobs:
 
       - name: Analyse the core
         run: >
-          msbuild tests/core_tests.vcxproj tests/ec_protocol_tests.vcxproj tests/app_bridge_tests.vcxproj
+          msbuild tests/core_tests.vcxproj tests/ec_protocol_tests.vcxproj
+                        tests/app_bridge_tests.vcxproj tests/legacy_policy_tests.vcxproj
+                        tests/legacy_backend_tests.vcxproj
           /p:Configuration=Release
           /p:Platform=x64
           /p:RunCodeAnalysis=true

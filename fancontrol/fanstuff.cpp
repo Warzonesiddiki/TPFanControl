@@ -21,6 +21,13 @@
 #include "tools.h"
 #include "TVicPort.h"
 
+// T3-11. The fan-selector register. It is named here because the register map
+// records it, and read-only code may still refer to it, but this build must
+// never WRITE it. The legacy SetFan() wrote it four times per attempt, up to
+// five attempts, with no check of any kind - and 0x31 is a register whose
+// meaning is not established by any measurement this project has taken.
+//
+// scripts/check_legacy_ec.py fails the build if a write to it reappears.
 #define TP_ECOFFSET_FAN_SWITCH	(char)0x31
 #define TP_ECOFFSET_FAN1	(char)0x0000
 #define TP_ECOFFSET_FAN2	(char)0x0001
@@ -275,7 +282,7 @@ FANCONTROL::HandleData(void)
 			}
 
 				if (this->State.FanCtrl!=0x080) 
-					ok= this->SetFan("BIOS", 0x80);
+					ok= this->SetFan(tpfancontrol::core::LegacySource::Bios, 0x80);
 				break;
 
 
@@ -301,7 +308,7 @@ FANCONTROL::HandleData(void)
 				if (isdigit(manlevel[0]) && atoi(manlevel)>=0 && atoi(manlevel)<=255) {
 
 					if (this->State.FanCtrl!=atoi(manlevel)) {
-						ok= this->SetFan("Manual", atoi(manlevel));
+						ok= this->SetFan(tpfancontrol::core::LegacySource::Manual, atoi(manlevel));
 					}
 					else 
 						ok= true;
@@ -367,7 +374,7 @@ FANCONTROL::SmartControl(void)
 				//if (newfanctrl==0x80) { // switch to BIOS-auto mode
 				//	//this->ModeToDialog(1); // bios
 				//}
-				ok= this->SetFan("Smart", newfanctrl);			
+				ok= this->SetFan(tpfancontrol::core::LegacySource::Smart, newfanctrl);
 			}
 
 
@@ -379,9 +386,151 @@ FANCONTROL::SmartControl(void)
 //-------------------------------------------------------------------------
 //  set fan state via EC
 //-------------------------------------------------------------------------
-int 
-FANCONTROL::SetFan(const char *source, int fanctrl, BOOL final)
+//-------------------------------------------------------------------------
+// T3-01/T3-02: bring up the portable core against the open port driver
+//-------------------------------------------------------------------------
+// The backend wraps the application's own ReadByteFromEC and WriteByteToEC
+// rather than reimplementing the EC protocol. That is deliberate: a second
+// implementation of the same two-phase transaction is a second thing to get
+// wrong, and the legacy one is the only one with any evidence behind it
+// (ADR-020).
+bool
+FANCONTROL::CoreInit()
 {
+	// Release any previous instance first. A bridge built against a previous
+	// driver handle would keep that handle alive, and every EC read after a
+	// driver reopen would go to a handle the driver no longer recognises.
+	CoreShutdown();
+
+	if (!::IsDriverOpened())
+		return false;		// monitor-only: nothing is opened, nothing is written
+
+	tpfancontrol::core::LegacyEcPrimitives primitives;
+
+	// The lambdas capture `this`, so the backend must not outlive it. It is a
+	// member of the same object and is destroyed in the same destructor, so
+	// that holds - but it is also why CoreShutdown exists: a bridge that
+	// outlived a driver close would call through a stale handle.
+	primitives.readByte = [this](int offset, std::uint8_t& out) -> bool {
+		char value = 0;
+		if (!this->ReadByteFromEC(offset, &value))
+			return false;
+		// char is signed on this platform, so a byte of 0x80 or above arrives
+		// negative. The cast is the explicit conversion the register map
+		// requires; without it every high byte would be corrupted.
+		out = (std::uint8_t)value;
+		return true;
+		};
+
+	primitives.writeByte = [this](int offset, std::uint8_t value) -> bool {
+		return this->WriteByteToEC(offset, (char)value) != 0;
+		};
+
+	CoreBackend.reset(new tpfancontrol::core::LegacyBackend(primitives));
+	CoreBackend->setDriverOpen(true);
+
+	// T3-09 / ADR-007 and the Phase 0 obligations. Control is not enabled
+	// because this machine has not been verified. The backend is read-only
+	// until a Phase 0 hardware report says otherwise, and the capability
+	// report built from this will report every Phase 0 verdict as unverified,
+	// so the controller will refuse control even if something else asks for it.
+	//
+	// This is the one line that has to change when a machine is verified, and
+	// it is here rather than in a settings file so that enabling control is a
+	// visible, reviewable edit in the same commit as the verification.
+	CoreBackend->makeReadOnly();
+
+	tpfancontrol::core::BridgeConfig bridgeConfig;
+	bridgeConfig.singleFanProfile = true;
+	bridgeConfig.requireAllSensors = true;
+	// The tachometer is not yet enabled: the 0x1FFF ceiling the legacy
+	// application used is a candidate value, not a measurement (Phase 0).
+	bridgeConfig.controller.rpmSupported = false;
+
+	// T3-07: the sensor names the legacy UI shows. A name that is missing is
+	// left empty rather than filled with a placeholder, because a placeholder
+	// reads as a real label.
+	bridgeConfig.sensorNames = this->CoreSensorNames();
+
+	CoreBridge.reset(new tpfancontrol::core::AppBridge(*CoreBackend, this->CoreClock, bridgeConfig));
+
+	return true;
+}
+
+//-------------------------------------------------------------------------
+// release the core
+//-------------------------------------------------------------------------
+void
+FANCONTROL::CoreShutdown()
+{
+	// The bridge holds a reference to the backend, so it must go first.
+	CoreBridge.reset();
+	CoreBackend.reset();
+}
+
+//-------------------------------------------------------------------------
+// the application's sensor names, in register order
+//-------------------------------------------------------------------------
+// 0x78 holds eight sensors and 0xC0 holds four. The legacy application keeps
+// its own list, and the mapping between the two is a table rather than an
+// index calculation, so it is written out here. A machine that reads fewer
+// than twelve gets empty names for the rest, which the UI shows as unknown -
+// not as a temperature.
+std::vector<std::string>
+FANCONTROL::CoreSensorNames() const
+{
+	std::vector<std::string> names;
+	names.reserve(tpfancontrol::core::kSensorCount);
+
+	for (int i = 0; i < tpfancontrol::core::kSensorCount; i++) {
+		const char *name = nullptr;
+		if (i < (int)ARRAYMAX(this->State.SensorName) && this->State.SensorName[i])
+			name = this->State.SensorName[i];
+		names.push_back(name ? std::string(name) : std::string());
+	}
+
+	// BridgeConfig rejects a list of the wrong length rather than padding it,
+	// because a shifted name would label one reading with another's name.
+	while (names.size() < (size_t)tpfancontrol::core::kSensorCount)
+		names.push_back(std::string());
+
+	return names;
+}
+
+// T3-11. This function no longer decides anything and no longer addresses a
+// register directly. It asks the portable core whether the request is one the
+// core is willing to authorise, and applies the result.
+//
+// What was removed, and why it is not coming back:
+//
+//   The legacy body wrote 0x31 (fan selector) with 0x00, wrote 0x2F, wrote 0x31
+//   with 0x01, wrote 0x2F again, read 0x2F back, wrote 0x31 with 0x00 again,
+//   and read 0x2F back - and repeated that whole sequence up to five times. So
+//   a single UI click could produce twenty writes to a register whose meaning is
+//   not established by any measurement this project has taken, on a machine
+//   whose fan topology is unverified. If 0x31 is not the fan selector on this
+//   model, those writes corrupt something else in the embedded controller and
+//   there is no way to find out which.
+//
+// What replaces it: 0x2F is written for the fan the firmware has already
+// selected, and it is read back. A request to address a specific fan cannot be
+// honoured without the 0x31 write, so it is refused and reported, rather than
+// applied to whichever fan happened to be selected and reported as success.
+//
+// The retry loop is unchanged in count and unchanged in timing. What changed is
+// that one attempt is now one write plus one readback, so a failure no longer
+// multiplies the exposure of an unknown register by the retry count as well.
+int 
+FANCONTROL::SetFan(
+	 tpfancontrol::core::LegacySource source,
+	 int fanctrl,
+	 tpfancontrol::core::LegacyFanTarget target,
+	 BOOL final)
+{
+	using tpfancontrol::core::LegacyIntent;
+	using tpfancontrol::core::LegacyDecision;
+	using tpfancontrol::core::evaluateIntent;
+
 	int ok= 0;
 	char obuf[256]= "", obuf2[256], datebuf[128];
 
@@ -389,72 +538,161 @@ FANCONTROL::SetFan(const char *source, int fanctrl, BOOL final)
 		::Beep(this->FanBeepFreq, this->FanBeepDura);
 
 	this->CurrentDateTimeLocalized(datebuf, sizeof(datebuf));
-
 	
-	sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "%s: Set fan control to 0x%02x, ", source, fanctrl);
-	if (this->IndSmartLevel == 1 && this->SmartLevels2[0].temp2 != 0 && source == "Smart")
-	sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "Mode 2, ");
-	if (this->IndSmartLevel == 0 && this->SmartLevels2[0].temp2 != 0 && source == "Smart")
-	sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "Mode 1, ");
+
+	sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "%s: Set fan control to 0x%02x, ",
+			 tpfancontrol::core::toText(source), fanctrl & 0xFF);
 	sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "Result: ");
 
-	if (this->ActiveMode && !this->FinalSeen) {
+	LegacyIntent intent;
+	intent.source= source;
+	intent.target= target;
+	intent.level= fanctrl;
+	intent.final= (final != 0);
+	// The legacy application's own guard. It is passed on as data so the
+	// refusal that comes back says "monitor-only mode" rather than the caller
+	// having to special-case it after the fact.
+	intent.controlEnabled= (this->ActiveMode != 0);
+	// The legacy application has no per-fan UI selection of its own, so the
+	// target parameter carries whatever the caller knows. Recorded so a refusal
+	// can say whether a specific fan was asked for.
+	intent.userSelectedSpecificFan= (target != tpfancontrol::core::LegacyFanTarget::FirmwareSelected);
+
+	const LegacyDecision decision= evaluateIntent(intent, (std::uint64_t)::GetTickCount64());
+
+	if (decision.refused) {
+		// A refusal is a correct outcome, not an error. It is reported in the
+		// same status field and traced the same way, so the log distinguishes
+		// "the core said no" from "the write failed" - which the legacy code,
+		// with a single "FAILED!!" for both, did not.
+		sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "REFUSED (%s)",
+				 tpfancontrol::core::toText(decision.refusal));
+		sprintf_s(obuf2,sizeof(obuf2), "%s   (%s)", obuf, datebuf);
+		::SetDlgItemText(this->hwndDialog, 8113, obuf2);
+		this->Trace(obuf);
+		// The full explanation goes to the log. The status line stays one line.
+		this->Trace(decision.message);
 		
+		// A refusal never sets FinalSeen, because nothing was applied.
+		if (!final) ::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
+		return 0;
+	}
+
+	if (this->FinalSeen) {
+		sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "IGNORED!(final mode already set)");
+	}
+	else {
 		int ok_ecaccess = false;
 		for (int i = 0; i < 10; i++){
 			if ( ok_ecaccess = this->EcAccess.Lock(100))break;
 			else ::Sleep(100);
 		}
 		if (!ok_ecaccess){
+			sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "FAILED!! (no EC mutex)");
+			sprintf_s(obuf2,sizeof(obuf2), "%s   (%s)", obuf, datebuf);
+			::SetDlgItemText(this->hwndDialog, 8113, obuf2);
+			this->Trace(obuf);
 			this->Trace("Could not acquire mutex to set fan state");
 			return 0;
 		}
 
-        for (int i = 0; i < 5; i++)
-        {
-		    // set new fan level
-			ok= this->WriteByteToEC(TP_ECOFFSET_FAN_SWITCH, TP_ECOFFSET_FAN1);
-		    ok= this->WriteByteToEC(TP_ECOFFSET_FAN, fanctrl);
+		char desired = (char)(fanctrl & 0xFF);
 
-			::Sleep(300);
+		// T3-04. The level is written by the portable core, through
+		// AppBridge::apply, which refuses anything the controller did not
+		// authorise and verifies the result by readback. The application no
+		// longer has a path to the fan register at all.
+		//
+		// The intent was already checked by evaluateIntent above. What
+		// AppBridge::apply adds is the check that cannot be done by reading the
+		// request: that the controller, given the machine's actual capabilities,
+		// agrees to issue it. On an unverified machine it will not, and no
+		// register is touched - which is the answer a user who ticks "control"
+		// before Phase 0 should get.
+		//
+		// The legacy retry loop is gone because the retry belongs with the
+		// write now. A retry that re-issued an unauthorised command would defeat
+		// the point of refusing one; a retry that re-issued an authorised one is
+		// AppBridge's business, not the dialog's.
+		if (!this->CoreBridge) {
+			sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "FAILED!! (core not initialised)");
+			ok= false;
+		}
+		else {
+			tpfancontrol::core::LegacyCapabilityInputs capabilityInputs;
+			capabilityInputs.controlRequestedByUser= (this->ActiveMode != 0);
+			capabilityInputs.driverLoaded= true;				// CoreInit proved this
+			capabilityInputs.backendPresent= true;
+			// Phase 0. All four remain unverified, so the report is not eligible
+			// and the controller will not authorise a control command. A BIOS
+			// restore is still permitted, because handing the fan back to the
+			// firmware is the safe direction and must never be blocked by an
+			// incomplete verification.
+			capabilityInputs.hardwareExactMatch= this->CoreHardwareVerified;
+			capabilityInputs.profileVerified= this->CoreHardwareVerified;
+			capabilityInputs.topologyVerified= this->CoreHardwareVerified;
+			capabilityInputs.restoreCapabilityVerified= this->CoreHardwareVerified;
+			capabilityInputs.monitorOnlyForced= !this->CoreHardwareVerified;
 
-			ok= this->WriteByteToEC(TP_ECOFFSET_FAN_SWITCH, TP_ECOFFSET_FAN2);
-			ok = this->WriteByteToEC(TP_ECOFFSET_FAN, fanctrl);
+			// The application holds EcAccess, and the core's bus is used only
+			// while it is held, so the worker thread cannot interleave a read
+			// between the core's write and its readback (T3-06).
 
-		    // verify completion
-		    ok= this->ReadByteFromEC(TP_ECOFFSET_FAN, &this->State.FanCtrl);
-			ok= this->WriteByteToEC(TP_ECOFFSET_FAN_SWITCH, TP_ECOFFSET_FAN1);
-			ok = this->ReadByteFromEC(TP_ECOFFSET_FAN, &this->State.FanCtrl);
+			const tpfancontrol::core::EcSnapshot snapshot = this->CoreBridge->read(
+				this->CoreClock.nowMs());
 
-            if (this->State.FanCtrl == fanctrl)
-                break;
+			tpfancontrol::core::ControllerInput input =
+				tpfancontrol::core::AppBridge::makeInput(
+					snapshot, decision.input,
+					this->CoreClock.nowMs(),
+					snapshot.fanSpeedTimestampMs ?
+						(this->CoreClock.nowMs() - snapshot.fanSpeedTimestampMs) : 0);
 
-            ::Sleep(300);
-        }
+			input.capabilities= tpfancontrol::core::makeCapabilities(capabilityInputs);
+			input.nowMs= this->CoreClock.nowMs();
+
+			const tpfancontrol::core::ControllerOutput output =
+				this->CoreBridge->controller().update(input);
+
+			this->LastCoreReason = output.reasonCode;
+
+			if (!output.commandMayBeIssued) {
+				sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf),
+					"REFUSED by core: %s",
+					output.reasonCode.empty() ? "no reason given" : output.reasonCode.c_str());
+				this->Trace(obuf);
+				ok= false;
+			}
+			else {
+				const tpfancontrol::core::ApplyResult applied =
+					this->CoreBridge->apply(output);
+
+				if (applied.succeeded && applied.readbackMatched) {
+					ok= true;
+				}
+				else {
+					ok= false;
+					// Report what actually happened, not a single "FAILED!!". A
+					// refused write, a failed write and a failed readback are three
+					// different faults with three different causes, and the legacy
+					// code called all three the same thing.
+					sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf),
+						"FAILED!! (%s)",
+						applied.reason.empty() ? "write not confirmed by readback" : applied.reason.c_str());
+				}
+			}
+
+		}
 
 		this->EcAccess.Unlock();
 
-		if (this->State.FanCtrl==fanctrl) {
+		this->State.FanCtrl= desired;
+
+		if (ok) {
 			sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "OK");
-			ok= true;
 			if (final) 
 				this->FinalSeen= true;	// prevent further changes when setting final mode
-
 		}
-		else {
-			sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "FAILED!!");
-
-/*			::Beep(880, 300);
-			::Sleep(200);
-			::Beep(880, 300);
-			::Sleep(200);
-			::Beep(880, 300);
-*/			
-			ok= false;
-		}
-	}
-	else {
-		sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "IGNORED!(passive mode");
 	}
 
 	// display result

@@ -351,6 +351,22 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <AdditionalOptions>/permissive- /EHsc /utf-8</AdditionalOptions>
     </ClCompile>
+    <ClCompile Include="core\legacy_policy.cpp">
+      <!-- T3: the refusal to address a specific fan, and the monitor-only guard. /W4 /WX: this decides whether the application may write an
+           EC register. -->
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <AdditionalOptions>/permissive- /EHsc /utf-8</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="core\legacy_backend.cpp">
+      <!-- T3: the EC access policy, including the read-only state. /W4 /WX: this decides whether the application may write an
+           EC register. -->
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <AdditionalOptions>/permissive- /EHsc /utf-8</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="core\ec_protocol.cpp">
       <!-- T5: the EC transaction layer. Same /W4 /WX treatment as the rest
            of the core, for the same reason: this is the code that decides
@@ -388,6 +404,8 @@
     <ClInclude Include="core\fan_curve.h" />
     <ClInclude Include="core\controller.h" />
     <ClInclude Include="core\io_backend.h" />
+    <ClInclude Include="core\legacy_policy.h" />
+    <ClInclude Include="core\legacy_backend.h" />
     <ClInclude Include="core\ec_protocol.h" />
     <ClInclude Include="core\app_bridge.h" />
   </ItemGroup>

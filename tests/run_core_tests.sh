@@ -1,11 +1,15 @@
 #!/usr/bin/env sh
 # Portable test runner for the TPFanControl core.
 #
-# Builds and runs ALL THREE portable suites:
+# Builds and runs ALL SIX portable suites:
 #   core_tests         - controller, curves, sensor validation, fan health
 #   ec_protocol_tests  - EC bus timeouts, retry policy, the 0x31 refusal
 #   app_bridge_tests   - the seam with the legacy application: no fan command
 #                        without core approval, and never a 0x31 write
+#   legacy_policy_tests - translating the legacy UI's intent into a controller
+#                        request, including the refusal to address one fan
+#   legacy_backend_tests- the EC access policy, including the read-only state
+#                        an unverified machine is held in
 #
 # This is the suite CI runs on every push, and the one a contributor can run
 # without Visual Studio. It is not a substitute for the Windows build: see
@@ -28,7 +32,9 @@ $ROOT/fancontrol/core/fan_curve.cpp
 $ROOT/fancontrol/core/controller.cpp
 $ROOT/fancontrol/core/io_backend.cpp
 $ROOT/fancontrol/core/ec_protocol.cpp
-$ROOT/fancontrol/core/app_bridge.cpp"
+$ROOT/fancontrol/core/app_bridge.cpp
+$ROOT/fancontrol/core/legacy_policy.cpp
+$ROOT/fancontrol/core/legacy_backend.cpp"
 
 # $1 = suite name, $2 = extra sources, $3 = extra compile flags, $4 = extra link flags
 build_and_run() {
@@ -65,3 +71,13 @@ build_and_run app_bridge_tests \
     "$ROOT/tests/fake_ec.cpp $ROOT/tests/app_bridge_tests.cpp" \
     "" \
     "-pthread"
+
+build_and_run legacy_policy_tests \
+    "$ROOT/tests/legacy_policy_tests.cpp" \
+    "" \
+    ""
+
+build_and_run legacy_backend_tests \
+    "$ROOT/tests/legacy_backend_tests.cpp" \
+    "" \
+    ""
