@@ -300,6 +300,26 @@ jobs:
           python3 scripts/check_legacy_ec_selftest.py
           python3 scripts/check_legacy_ec.py
 
+      - name: The application actually starts the portable core
+        # T5-04. The whole core existed for one task with no caller in the
+        # shipped application: CoreInit sat in the protected section of
+        # FANCONTROL while the startup path is a free function, so the call that
+        # was needed was impossible to write and CoreBridge was always null.
+        # Every fan request answered "core not initialised", which is safe and is
+        # not the integration the T3 work describes.
+        #
+        # No test in this repository can execute the startup path, and the
+        # compiler sees one file at a time, so the guard is static: the seam is
+        # called from the startup path, it is declared public, StartCore calls
+        # CoreInit, and AppBridge has exactly one construction site.
+        #
+        # The self-test runs first. A guard whose patterns have stopped matching
+        # reports a clean tree and a green job, and this repository has already
+        # been bitten by a "wired up" claim that was not true.
+        run: |
+          python3 scripts/check_core_bootstrap.py --selftest
+          python3 scripts/check_core_bootstrap.py
+
       - name: Shell scripts start with a clean shebang
         # A UTF-8 BOM is invisible in an editor and fatal to /bin/sh: the kernel
         # reads the first two bytes as '#!', fails, and the script is

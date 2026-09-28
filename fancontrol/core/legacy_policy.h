@@ -124,6 +124,71 @@ struct LegacyCapabilityInputs {
 // boolean the UI set.
 CapabilityReport makeCapabilities(const LegacyCapabilityInputs& in);
 
+// ---------------------------------------------------------------------------
+// The startup assessment (T5-04).
+//
+// What the application should do when it starts, expressed as a decision rather
+// than as a sequence of ifs in Win32 code that nothing here can execute.
+//
+// The requirement is in DRIVER_BACKENDS.md section 5: with no approved backend,
+// monitor temperatures if possible, issue no manual EC writes, leave the fan to
+// the BIOS, and explain the missing dependency. "If possible" is doing real work
+// in that sentence, because on this machine the temperature sources are EC
+// registers: with no backend there is nothing to read, and saying "monitoring"
+// would promise readings that cannot arrive.
+//
+// So the assessment distinguishes the two monitor-only situations that the
+// legacy code collapsed into one:
+//
+//   * no backend          - nothing can be read and nothing may be written. The
+//                           window can show nothing, and the only honest thing
+//                           to show is why, plus the fact that the fan is on
+//                           firmware control.
+//   * backend, unverified - readings work and are shown; control is not
+//                           approved (Phase 0), so the fan is still the
+//                           firmware's.
+//
+// It never decides eligibility by itself. "May this machine be controlled" is
+// CapabilityReport::controlEligible(), which the controller also applies; a
+// second answer here would be a second rule, and the two would diverge. The
+// tests assert the two agree for every combination of inputs.
+// ---------------------------------------------------------------------------
+enum class StartupMode {
+    NoBackend,        // monitor-only, and not even readings are available
+    MonitorOnly,      // readings available, control not approved
+    ControlEligible,  // every Phase 0 verdict holds and control is approved
+};
+
+const char* toText(StartupMode mode) noexcept;
+
+struct StartupAssessment {
+    StartupMode mode = StartupMode::NoBackend;
+
+    // Whether this mode is monitor-only in the safety sense: no register may be
+    // written. True for NoBackend and MonitorOnly, and the application must not
+    // treat either as a fault - the machine is being used exactly as intended.
+    bool monitorOnly = true;
+
+    // Whether anything can be displayed. False in NoBackend: there is no way to
+    // reach the EC, so a temperature pane would be a pane of lies.
+    bool readingsAvailable = false;
+
+    // The same answer the controller will give, taken from the capability
+    // report rather than recomputed. False in every monitor-only mode.
+    bool mayControl = false;
+
+    // One line for the status field. Never empty: a blank status line reads as
+    // healthy, which is the failure mode the UI text functions exist to prevent.
+    std::string statusLine;
+
+    // The longer explanation, naming the missing dependency or the unverified
+    // condition and saying who has the fan. Never empty.
+    std::string explanation;
+};
+
+// Pure: no I/O, no globals, so it can be tested exhaustively.
+StartupAssessment assessStartup(const LegacyCapabilityInputs& in);
+
 // Translates an intent into a controller input. Pure: it performs no I/O and
 // consults no global state, so the decision can be tested exhaustively.
 //

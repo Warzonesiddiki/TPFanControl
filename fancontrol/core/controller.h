@@ -17,6 +17,16 @@ struct CapabilityReport {
     bool backendReady = false;
     bool restoreAvailable = false;
 
+    // Somebody with the machine said monitor-only. It outranks the Phase 0
+    // verdicts rather than being one of them: a verified machine can still be
+    // held in monitor-only mode by the person using it, and nothing else may
+    // override that.
+    //
+    // This field existed as an input to the legacy capability mapping long
+    // before anything read it, which made "the user chose monitor only" a
+    // comment rather than a rule. T5-04 made controlEligible() honour it.
+    bool monitorOnlyForced = false;
+
     bool controlEligible() const noexcept;
     std::string blockingReason() const;
 };

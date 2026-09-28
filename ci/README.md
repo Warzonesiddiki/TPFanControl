@@ -39,7 +39,7 @@ no green run exists to close them.
 | `portable-tests` | ubuntu, macos, windows | `tests/run_core_tests.sh`, plus ASan + UBSan on the non-Windows legs |
 | `windows-build` | windows | `Debug`/`Release` x `Win32`/`x64`; builds the solution and runs all seven test executables; archives the build log |
 | `release-warnings-as-errors` | windows | Release x64 core build with warnings-as-errors, the suite, and a step that asserts the flags reached every core unit |
-| `hygiene` | ubuntu | `git diff --check`, solution/project structure (including that no project writes another project's binary), every project compiles from its own source list, the legacy no-write guard, the `ecdiag` read-only guard, the dependency record's hashes and required fields, shell shebangs, Markdown links, the workflow's own portable steps, no tracked build artifacts, all text files valid UTF-8 |
+| `hygiene` | ubuntu | `git diff --check`, solution/project structure (including that no project writes another project's binary), every project compiles from its own source list, the legacy no-write guard, the `ecdiag` read-only guard, the core-bootstrap guard (the application actually starts the core), the dependency record's hashes and required fields, shell shebangs, Markdown links, the workflow's own portable steps, no tracked build artifacts, all text files valid UTF-8 |
 | `static-analysis` | windows | MSVC `/analyze` on the core (enforced) and the application (reported until T1-05 closes) |
 
 No job loads a kernel driver or writes to an EC register.

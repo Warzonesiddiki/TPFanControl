@@ -848,3 +848,125 @@ Phase 0 report and the option is set by the code that constructs the baseline
 run — with the report as its justification. If a future backend makes this
 switch irrelevant, this ADR is superseded rather than deleted, because the
 question will come back with the next vendor library.
+
+## ADR-027 — The application starts the core through a public seam, and a machine with no backend is monitor-only with no readings
+
+**Status.** Accepted, T5-04. Fills a gap in the T3 work rather than changing it.
+
+**Context.** T5-04 asks for monitor-only behaviour when the backend is absent.
+Writing the tests for it turned up a defect that had been in the tree since the
+T3 integration landed:
+
+`FANCONTROL::CoreInit()` existed, was documented in three places, was named in
+the checklist as the thing that wires the core up, and **had no caller**. So
+`CoreBridge` was always null, and every path that could move the fan ended at
+`"FAILED!! (core not initialised)"`. The safety property held - nothing was
+written - but the integration that T3 describes was dead code, and the
+checklist's own "biggest single risk" line (*the portable core is not connected
+to the application*) had quietly become true in a way that line did not
+describe.
+
+It could not have been caught by any test in this repository, and it could not
+have been caught by the compiler either, for the same reason: `CoreInit` sat in
+the `protected:` section of `FANCONTROL` while the startup path, `approot.cpp`,
+is a free function. The call that was needed was not *missing* - it was
+**impossible to write**. Each file reads correctly on its own; the defect exists
+only in the relationship between two files, which is exactly the shape that no
+single-file review and no single-file check can see.
+
+**Decision 1 — the seam is public and narrow.**
+
+`StartCore()` starts the core and traces what it decided; `CoreStatus()` returns
+the decision. `CoreInit` and `CoreShutdown` stay protected: they touch the core
+member by member, and a caller outside the class would have to keep them in
+step. One public entry point, one public accessor, and a check that the seam is
+declared after the `public:` label.
+
+**Decision 2 — the startup decision is portable code, not an if-chain in Win32.**
+
+`core::assessStartup` takes the capability inputs and returns a `StartupAssessment`:
+the mode, whether readings are available, whether control is approved, and two
+strings (a status line and an explanation) that are never empty. Three modes:
+
+| Mode | Readings | May write | Meaning |
+|---|---|---|---|
+| `NoBackend` | no | no | The temperature sources are EC registers, so with no backend there is nothing to read. Say so; leave the fan with the firmware. |
+| `MonitorOnly` | yes | no | Readings are shown; control is not approved (Phase 0), so no register is written. |
+| `ControlEligible` | yes | Phase 0 verdicts hold | Still not an activation: control needs the user's request and the consecutive-samples gate (ADR-014). |
+
+"If possible" in `DRIVER_BACKENDS.md` §5 is doing real work, and this is where it
+lands: **monitor-only does not imply "readings are available"**. A window showing
+zeros because its data source never answered is worse than one that says the
+source is missing.
+
+**Decision 3 — one eligibility rule, not two.**
+
+`assessStartup` does not decide eligibility. It calls
+`CapabilityReport::controlEligible()` - the same predicate the controller applies
+- and a test asserts the two agree for all 128 combinations of the seven
+booleans that can matter. A second rule here would be a second answer, and the
+one the user sees would be the weaker.
+
+That test found the second defect of this task: `monitorOnlyForced` was an input
+the application set (`capabilityInputs.monitorOnlyForced = !CoreHardwareVerified`)
+and **nothing read**. "The user chose monitor-only" was a comment. It is now part
+of `controlEligible()`, checked first, with `monitor_only_forced` as the blocking
+reason.
+
+**Decision 4 — no backend is not a crash, and it is not a blank window.**
+
+The legacy startup path retried `OpenTVicPort()` for 180 seconds and then exited
+with a message box naming `tvicport.sys`. That behaviour is kept - the retry is
+legacy behaviour being measured, and exiting is honest when there is genuinely
+nothing to show - but the *text* now comes from `assessStartup`, so the message,
+the status line and the refusal messages cannot drift apart. What changed is that
+the reason is a decision rather than a hand-written string in one dialog, and the
+same decision is what a running application reports if the driver goes away
+under it.
+
+**Alternatives considered.**
+
+- *Make the core's state public and let `approot.cpp` drive it member by member* —
+  rejected: it puts the startup order in two files, and the order matters (the
+  clock must outlive the bridge; the bridge must be destroyed before the driver
+  closes).
+- *Have `CoreInit` called from `Test()`* — rejected. `Test()` is commented-out
+  experimental ACPI code, and hiding a safety-relevant bootstrap inside a
+  function whose name promises nothing is how this defect happened the first time.
+- *Let the window open with no backend and show empty fields* — rejected. A blank
+  or zeroed temperature pane reads as measurements; the project's own rule is that
+  an unavailable reading must be visibly unavailable.
+- *Ship a `Fatal` mode and exit from the core* — rejected. Exiting is a
+  user-interface decision about whether a window with no data is worth showing,
+  and the core does not know about windows. It reports; the application decides.
+
+**Safety impact.** Strictly downward in what the software does to the machine:
+the bootstrap changes no register by itself, `CoreInit` still builds the bridge
+with `allowRegisterWrites = false` and with every Phase 0 verdict false, and the
+one behavioural addition that could have gone the other way - honouring
+`monitorOnlyForced` - removes a path by which control could have been enabled
+against the operator's explicit choice. Nothing here loads a driver, and nothing
+weakens a Windows security setting.
+
+**Testing and evidence.** `tests/legacy_policy_tests.cpp` grows from 20 to 27
+tests: the three modes, the mid-session "driver closed" case, forced monitor-only
+surviving every verdict, the 128-machine exhaustive agreement with
+`controlEligible()`, and the "never blank" property of both strings.
+`scripts/check_core_bootstrap.py` (7-case self-test) is the static guard for the
+relationship no test can execute: the seam is called from the startup path, it is
+declared public, `StartCore` calls `CoreInit`, and the bridge has exactly one
+construction site. Wired into the CI hygiene job.
+
+**Consequences.** The core is no longer dead code in the shipped application: the
+bridge is built at startup, reads flow through it, and every write goes through
+`AppBridge::apply` or is refused. `SetFan`'s no-core refusal now prints the
+startup explanation instead of `"(core not initialised)"`. The x64 link gap and
+the missing hardware evidence are unchanged - this ADR adds no hardware claim,
+and the application still cannot be compiled in this environment.
+
+**Revisit conditions.** When Phase 0 produces a hardware report,
+`CoreHardwareVerified` becomes true for that machine, `monitorOnlyForced` stops
+being set by default, and the mode becomes `ControlEligible` - at which point the
+activation rules of ADR-014 are the only thing between the user and a moving fan.
+If a second backend arrives, this seam does not change: it takes an `IIoBackend`,
+not a TVicPort.

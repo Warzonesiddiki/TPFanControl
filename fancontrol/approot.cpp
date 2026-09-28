@@ -290,11 +290,37 @@ void WorkerThread(void *dummy)
     }
 	if (ok)
     {	
+		// ADR-026. This is the legacy path, and it turns hard access on for every
+		// machine without asking and without looking at the result. That is
+		// measured behaviour and it stays here, because a measurement taken
+		// through code that had already been changed is not a measurement of the
+		// thing users run. The modern path - core::TvicPortBackend, used for the
+		// baseline comparison - requests hard access only when a caller asks for
+		// it explicitly, and records the driver's answer either way. Do not
+		// "tidy" this line into the core, and do not copy it into a new backend.
 		HardAccess = TestHardAccess();
 		SetHardAccess(NewHardAccess);
 		HardAccess = TestHardAccess();
 
 		FANCONTROL fc(hInstApp);
+
+		// T5-04. Bring the portable core up against the driver that is now open,
+		// and trace what it decided: monitor-only with or without readings, and
+		// why.
+		//
+		// This call was missing until T5-04. CoreInit existed, was documented,
+		// and had no caller - and could not have had one, because it sits in the
+		// protected section while the startup path is a free function. So
+		// CoreBridge stayed null, and every request to move the fan answered
+		// "core not initialised". The safety property held (nothing was
+		// written), but the integration the T3 work describes was not running,
+		// and nothing in the tree said so. StartCore() is the public seam.
+		//
+		// A false return is not fatal here. The machine is safe, the fan belongs
+		// to the firmware, and every write path in the application already
+		// refuses without a core - so the application continues in monitor-only
+		// mode rather than refusing to start.
+		fc.StartCore();
 
 		fc.Test();
 
@@ -303,13 +329,32 @@ void WorkerThread(void *dummy)
 		fc.ProcessDialog();
 
 		::PostMessage(g_dialogWnd, WM_COMMAND, 5020, 0);
+
+		// Release the core before the driver it borrows primitives from. The
+		// bridge holds a reference to the backend, which holds callables that
+		// call into the driver; shutting the driver down first would leave both
+		// pointing at a closed handle.
+		fc.CoreShutdown();
 		CloseTVicPort();
 	}
 	else {
-		::MessageBox(HWND_DESKTOP, 
-					"Error during initialization of Port Driver.\r\n"
-					"(tvicport.sys missing in app folder or failed to load)",
-					"Fan Control", 
+		// T5-04: no backend. Monitoring is not possible either - the
+		// temperature sources are embedded-controller registers - so the
+		// application does not open a window that could only show nothing. It
+		// hands the fan to the firmware (which already has it), explains what is
+		// missing, and exits without writing anything.
+		//
+		// The text comes from the same startup decision the running application
+		// uses, so the message and the status line cannot drift apart.
+		tpfancontrol::core::LegacyCapabilityInputs startupInputs;
+		startupInputs.backendPresent= false;
+		startupInputs.driverLoaded= false;
+		const tpfancontrol::core::StartupAssessment startup=
+			tpfancontrol::core::assessStartup(startupInputs);
+
+		::MessageBox(HWND_DESKTOP,
+					startup.explanation.c_str(),
+					"Fan Control",
 					MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
 	}
 }

@@ -10,7 +10,7 @@ real port I/O operation.
 | `ec_protocol_tests` | 42 | `EcBus` transactions, wire sequence, IBF/OBF waits, timeouts, the `0x31` refusal |
 | `app_bridge_tests` | 31 | the seam: a command reaches the EC only if the core authorised it, readback verification, fail-safe on a read failure |
 | `ecdiag_tests` | 29 | the read-only diagnostic: a full run writes no register, the integrity checks catch a reader that does, strict JSON parsing |
-| `legacy_policy_tests` | 20 | the legacy UI's intent translated to a core request; the single-fan refusal; the monitor-only guard |
+| `legacy_policy_tests` | 27 | the legacy UI's intent translated to a core request; the single-fan refusal; the monitor-only guard; the startup assessment (three modes, 128-machine agreement with `controlEligible()`, text never blank) |
 | `legacy_backend_tests` | 16 | the port backend: port numbers arrive unchanged, `EcBus` + backend is one transaction, register writes are denied by default |
 | `tvicport_backend_tests` | 19 | the TVicPort adapter's lifecycle against a fake DLL: what it opens, what it refuses to open, and the hard-access switch it leaves alone |
 

@@ -388,11 +388,51 @@ FANCONTROL::SmartControl(void)
 //  set fan state via EC
 //-------------------------------------------------------------------------
 //-------------------------------------------------------------------------
-// T3-01/T3-02: bring up the portable core against the open port driver
+// T5-04: the public startup seam
+//-------------------------------------------------------------------------
+// CoreInit and the CoreStartup member are protected, because they are the
+// class's own state. The application's startup path is a free function, so it
+// needs a way in, and this is it: one call that starts the core and traces what
+// it decided.
+bool
+FANCONTROL::StartCore()
+{
+	const bool started= this->CoreInit();
+
+	if (started)
+		this->Trace(this->CoreStartup.statusLine.c_str());
+	else
+		this->Trace(this->CoreStartup.explanation.c_str());
+
+	return started;
+}
+
+const tpfancontrol::core::StartupAssessment&
+FANCONTROL::CoreStatus() const noexcept
+{
+	return this->CoreStartup;
+}
+
+//-------------------------------------------------------------------------
+// T5-04: whether the core may write anything at all
+//-------------------------------------------------------------------------
+// True in both monitor-only modes, including the one where there is no
+// backend and therefore nothing to read. It is not a fault state: the machine
+// is being used exactly as intended until a hardware report exists.
+bool
+FANCONTROL::CoreMonitorOnly(void) const noexcept
+{
+	return this->CoreStartup.monitorOnly;
+}
+
+//-------------------------------------------------------------------------
+//  build the core against the current driver handle
 //-------------------------------------------------------------------------
 // The backend wraps the driver's own port primitives, not the application's
 // register-level EC helpers. The EC protocol itself has exactly one
 // implementation in this codebase, and it is EcBus (ADR-020, ADR-023).
+//
+// T3-01/T3-02: bring up the portable core against the open port driver.
 bool
 FANCONTROL::CoreInit()
 {
@@ -401,8 +441,31 @@ FANCONTROL::CoreInit()
 	// driver reopen would go to a handle the driver no longer recognises.
 	CoreShutdown();
 
-	if (!::IsDriverOpened())
-		return false;		// monitor-only: nothing is opened, nothing is written
+	// T5-04. The startup decision comes first, and it is taken whether or not
+	// there is a driver: with no backend the application is in monitor-only
+	// mode with nothing to read, and the UI has to be able to say that instead
+	// of showing a blank pane. assessStartup is the same decision the status
+	// line and the refusal messages use, so there is one answer rather than
+	// three.
+	tpfancontrol::core::LegacyCapabilityInputs startupInputs;
+	startupInputs.backendPresent= true;
+	startupInputs.driverLoaded= ::IsDriverOpened() != FALSE;
+	startupInputs.controlRequestedByUser= (this->ActiveMode != 0);
+	startupInputs.hardwareExactMatch= this->CoreHardwareVerified;
+	startupInputs.profileVerified= this->CoreHardwareVerified;
+	startupInputs.topologyVerified= this->CoreHardwareVerified;
+	startupInputs.restoreCapabilityVerified= this->CoreHardwareVerified;
+	startupInputs.monitorOnlyForced= !this->CoreHardwareVerified;
+	this->CoreStartup= tpfancontrol::core::assessStartup(startupInputs);
+
+	if (!::IsDriverOpened()) {
+		// Monitor-only, and not even readings: the temperature sources are EC
+		// registers. Nothing is opened, nothing is written, and the fan stays
+		// with the firmware. The reason is in CoreStartup.explanation.
+		this->Trace(this->CoreStartup.statusLine.c_str());
+		this->Trace(this->CoreStartup.explanation.c_str());
+		return false;
+	}
 
 	// These are the driver's own port primitives - TVicPort's ReadPort and
 	// WritePort - and NOT FANCONTROL::ReadByteFromEC / WriteByteToEC.
@@ -627,7 +690,14 @@ FANCONTROL::SetFan(
 		// the point of refusing one; a retry that re-issued an authorised one is
 		// AppBridge's business, not the dialog's.
 		if (!this->CoreBridge) {
-			sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "FAILED!! (core not initialised)");
+			// The core is not initialised, so nothing here may command the fan.
+			// The status field takes the one-line decision; the paragraph goes
+			// to the log. Putting the explanation in the status field would
+			// truncate it mid-sentence in a 256-byte buffer, and a truncated
+			// safety message is worse than a short one.
+			sprintf_s(obuf+strlen(obuf),sizeof(obuf)-strlen(obuf), "REFUSED (no core: %s)",
+				this->CoreStartup.statusLine.c_str());
+			this->Trace(this->CoreStartup.explanation.c_str());
 			ok= false;
 		}
 		else {

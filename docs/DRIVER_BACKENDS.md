@@ -96,6 +96,20 @@ Leave fan control to BIOS.
 Explain the missing dependency to the user.
 ```
 
+The words in that block are load-bearing, and T5-04 is where they were turned
+into a decision. *If possible* is doing real work: the temperature sources on
+this machine are embedded-controller registers, so with no backend there is
+nothing to read, and "monitor-only" would be a window of zeros rather than a
+monitor. `core::assessStartup()` therefore reports three modes rather than two —
+`NoBackend` (no readings, nothing to display, fan with the firmware),
+`MonitorOnly` (readings shown, no register written, the blocking reason named)
+and `ControlEligible` (still not an activation; see ADR-014 and ADR-027) — and
+never returns a blank status string, because a blank one reads as "fine". The
+same decision supplies the text for the message the startup path shows when the
+driver is missing, so what the user is told and what the code decided cannot
+drift apart. ADR-027 records why this is core code and not an `if` chain in the
+Win32 dialog.
+
 Do not disable Secure Boot, HVCI, or the vulnerable-driver blocklist as part of normal installation.
 
 ## 6. x64 and Win32 policy

@@ -21,10 +21,10 @@ Legend:
 | Measure | Value |
 |---|---|
 | Documented safety gaps closed | 6 of 10 (gaps 1, 2, 3, 4, 5, 8) |
-| Portable-core test functions | 11 core + 42 EC + 31 bridge + 29 ecdiag + 20 policy + 16 backend = 149, plus a self-test for the three checkers that could otherwise stop matching silently (`check_ecdiag_readonly.py`, `check_project_sources.py`, `check_ci_steps.py`) |
-| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5: 01, 05, 06, 07, 08, 09, 10, 11 complete, 04 in progress, 02 blocked, 03 gated on it |
+| Portable-core test functions | 11 core + 42 EC + 31 bridge + 29 ecdiag + 27 policy + 16 backend + 19 TVicPort = 175, plus self-tests for the five checkers that could otherwise stop matching silently (`check_ecdiag_readonly.py`, `check_project_sources.py`, `check_ci_steps.py`, `check_legacy_ec_selftest.py`, `check_core_bootstrap.py`) |
+| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5: 01, 04, 05, 06, 07, 08, 09, 10, 11 complete, 02 blocked, 03 gated on it |
 | Critical path | T0 → T1 → T5 → T3 → T4 → T6 → T8 |
-| Biggest single risk | The portable core is not connected to the application. It is compiled by the project and tested, but no legacy file includes a core header, so the safety state machine is dead code that can drift from shipped behaviour indefinitely without any signal. |
+| Biggest single risk | The startup path cannot be executed here. T5-04 found that the core *was* disconnected — `CoreInit()` had no caller and `CoreBridge` was always null — and fixed it by wiring `StartCore()` into `approot.cpp`; the risk that remains is that the wiring is a static property, checked by `check_core_bootstrap.py`, not a build: no MSVC, no Windows, no run. The first evidence that the application starts the core will come from T1-11. |
 
 A **[!] Phase 0** gate is open: no hardware evidence exists. Nothing in T4 may start
 until Phase 0 completes.
@@ -106,7 +106,7 @@ are verified locally. Tasks are promoted to `[x]` only when a CI run supplies ev
 
 | ID | Task | Status | Evidence |
 |---|---|---|---|
-| T3-01 | Make the legacy application include a core header, so the safety state machine is no longer dead code | `[x]` | Done. `fancontrol.h` includes `core/app_bridge.h`, `core/legacy_backend.h`, `core/legacy_policy.h`; the namespaces are spelled out at each use rather than opened with a using-directive.
+| T3-01 | Make the legacy application include a core header, so the safety state machine is no longer dead code | `[x]` | Done. `fancontrol.h` includes `core/app_bridge.h`, `core/legacy_backend.h`, `core/legacy_policy.h`; the namespaces are spelled out at each use rather than opened with a using-directive. **Correction (T5-04):** including a core header was necessary and not sufficient — the state machine was still dead at run time, because the bridge was never constructed. See the correction note under this table.
 | T3-02 | Route the application's EC reads through `IIoBackend` | `[x]` | Done. `core/legacy_backend.{h,cpp}` adapts the existing `ReadByteFromEC`/`WriteByteToEC` rather than reimplementing the protocol. 16 tests, including that a register read through `EcBus` arrives at the port primitives as exactly one ADR-020 transaction and that no port number is ever truncated into a register address. Built but not run on Windows — see the note under the table.
 | T3-03 | Route the application's EC writes through the `EcBus` transaction layer | `[x]` | Done. `SetFan` writes only via `AppBridge::apply`, which verifies by readback. Bounded timeouts are `EcBus`'s; the retry loop that used to sit in `SetFan` is gone with the direct write.
 | T3-04 | Drive `Controller` from the application's data cycle instead of the legacy decision path | `[x]` | Done for the command path. `SetFan` runs `Controller::update` and applies only what the core authorises. The periodic *sensor* cycle is still the legacy `HandleData`; see the note under the table.
@@ -114,22 +114,40 @@ are verified locally. Tasks are promoted to `[x]` only when a CI run supplies ev
 | T3-06 | Serialise the EC transaction against the application's worker thread | `[x]` | Done for the write path. `SetFan` holds `EcAccess` across the bridge's write and its readback, so the worker thread cannot interleave between them. The read path still needs the same treatment and is not yet done.
 | T3-07 | Map `SafetyState` and `ControlMode` to UI text without bypassing transitions | `[x]` | Done. `toText(SafetyState)`, `toText(ControlMode)`, `toText(FanHealth)`, `toText(SensorValidity)` and `describe()` are in `core/app_bridge.h`, tested, and `describe` is never empty so a blank status cannot read as healthy. The dialog still shows its own strings; mapping them is UI work.
 | T3-08 | Build the application's state each cycle and assert no fan command without core approval | `[x]` | Done. `AppBridge::apply` refuses any output the core did not authorise, before touching the bus, and there is no other method in the class that writes a register. 31 tests, including the assertion that the written register set is exactly `{0x2F}`.
-| T3-09 | Keep monitor-only operation working when the backend is absent, end to end | `[x]` | Done. `LegacyBackend` is `Ready` while read-only, reads work, and every write returns `Unsupported`. `evaluateIntent` refuses every write source in monitor-only mode. Tested. Not yet exercised end to end in the running application — that needs Windows.
+| T3-09 | Keep monitor-only operation working when the backend is absent, end to end | `[x]` | Done. `LegacyBackend` is `Ready` while read-only, reads work, and every write returns `Unsupported`. `evaluateIntent` refuses every write source in monitor-only mode. Tested. Not yet exercised end to end in the running application — that needs Windows, and T5-04 is what made the running path exist at all.
 | T3-10 | Report backend failure, write failure and readback mismatch into the controller | `[x]` | Done. `AppBridge::makeInput` carries `backendFailure`, and the controller's own faults (`writeFailure`, `readbackMismatch`, `fanResponseFailed`) are reported from `apply` results. Tested in both directions: a read failure with restore verified fails safe to the firmware; without verified restore, nothing is issued.
 | T3-11 | Do not reintroduce the legacy unconditional `0x31` write on the dual-fan path | `[x]` | Done. No write to `0x31` exists in the repository. `scripts/check_legacy_ec.py` fails the build if one reappears, and `check_legacy_ec_selftest.py` proves the guard still fires. Both verified by reintroducing the defect. ADR-021, `EC_REGISTER_MAP.md` §10.
 | T3-12 | Record the integration in an ADR | `[x]` | Done. ADR-021 (refusing to address an individual fan), ADR-022 (superseded) and ADR-023 (the register-write barrier belongs to EcBus; the backend is a port backend).
 
 **T3 evidence note — what has and has not been shown.** Everything marked done in
-this table is verified by a runnable artifact in this repository: 168 tests across
+this table is verified by a runnable artifact in this repository: 175 tests across
 seven suites, passing plain, under `-O2 -DNDEBUG`, under ASan+UBSan and under TSan,
 plus the static checks in `scripts/`. None of that is a Windows build. The application has
 never been compiled here, because there is no Windows machine and no MSVC. The
-core call sequence `SetFan` makes was typechecked by a separate translation unit
-that mirrors it statement for statement, which catches an API mismatch but is not a
-build of the application — MSVC-specific issues (sprintf_s overloads, the exact
-`MUTEXSEM` semantics, Win32 header interactions) remain unverified until T1-11 runs
-on a Windows runner. Treat every T3 row as "implemented and unit-tested", not as
+core call sequence `SetFan` makes is typechecked by `tests/app_bridge_tests.cpp`,
+which calls the same functions with the same types in the same order, so an API
+mismatch fails to compile there — but that is not a build of the application.
+MSVC-specific issues (sprintf_s overloads, the exact `MUTEXSEM` semantics, Win32
+header interactions) remain unverified until T1-11 runs on a Windows runner. Treat every T3 row as "implemented and unit-tested", not as
 "known to build".
+
+**T3 correction — what T5-04 changed about this table.** T3-01's goal was that the
+safety state machine stop being dead code. The headers were included, `SetFan` was
+rewritten to build a `LegacyIntent`, `AppBridge::apply` was the only writer, and
+`check_legacy_ec.py` guarded the old path — all of it real, all of it tested. What
+was missing is that **nothing ever constructed the core**: `FANCONTROL::CoreInit()`
+had no caller, so `CoreBridge` was null at run time and every one of the six
+`SetFan` call sites ended in `"FAILED!! (core not initialised)"`. The rows above
+describe the code faithfully; the application did not execute it. This is recorded
+rather than quietly repaired, because the same mistake is available again to anyone
+who reads a diff instead of greping for a caller: on this machine, "the code is
+wired up" was true of every file and false of the program.
+
+T5-04 fixed it — `StartCore()` is called from `approot.cpp` before `fc.Test()`, and
+`scripts/check_core_bootstrap.py` fails the build if that stops being true. The
+correction is also why the *sensor* cycle (T3-04's remaining half) is a different
+proposition now: the periodic `HandleData` path runs in an application whose core is
+actually built, rather than in one where nothing downstream of it existed.
 
 ---
 
@@ -165,7 +183,7 @@ would imply a capability the project does not have.
 | T5-01 | TVicPort adapter implementing `IIoBackend`, for baseline comparison | `[x]` | `core/tvicport_backend.{h,cpp}` (the adapter, testable everywhere), `tvicport_dll.{h,cpp}` (the only file that names the vendor DLL's entry points), `tests/tvicport_backend_tests.cpp` (**19 tests**, against a fake DLL that counts calls to all seven entry points). It opens the driver only when `attach()` is called and closes only what it opened; a driver closed behind its back stops every port call; ports and all 256 byte values arrive unchanged; every call is traceable. It forwards port values rather than filtering them — refusing `0x31`/`0x2F` is `EcBus`'s job (ADR-021, ADR-023) — and a test asserts that, so the layering cannot drift back. **The one behaviour it deliberately does not reproduce:** `approot.cpp` calls `SetHardAccess(true)` unconditionally and ignores the result; the adapter requests hard access only when the caller asks, and records the driver's answer, whether it asked, whether the setting changed, and who opened the driver (ADR-026). The mapping from the DLL onto the port layer now exists once — `makeTvicPortPrimitives`, used by both the adapter and `fanstuff.cpp`, which previously wrote the same two lambdas by hand. **Not verified:** no MSVC, no Windows, no driver, no hardware. The adapter has never spoken to a running TVicPort, and `tvicport_dll.cpp` has never been compiled. T1-01 and then T4-06 are where that changes. |
 | T5-02 | PawnIO feasibility spike on a disposable Windows install ([DRIVER_BACKENDS.md](DRIVER_BACKENDS.md) §4) | `[!]` | Genuinely blocked: needs a disposable Windows install, a driver download, and an HVCI-capable machine. No substitute evidence is acceptable. |
 | T5-03 | Record backend signature and HVCI result | `[ ]` | Blocked behind T5-02. The matrix location exists and is empty. |
-| T5-04 | Monitor-only behavior when the backend is absent | `[-]` | The core already refuses to command without a ready backend (`testCapabilityAndFailureGates`, plus `testBackendNotReadyRefusesBeforeTouchingHardware`). The application-level path is wired in T3. |
+| T5-04 | Monitor-only behavior when the backend is absent | `[x]` | Done, and it found a defect. `core/legacy_policy.{h,cpp}` now has `assessStartup()`: one pure decision with three modes — `NoBackend` (no readable temperature at all, because the sources are EC registers), `MonitorOnly` (readings shown, no register written, the blocking reason named) and `ControlEligible` (still not an activation; ADR-027). It does not compute eligibility: it calls `CapabilityReport::controlEligible()`, and a test asserts the two agree for **all 128** combinations of the seven inputs. The text the user sees is never empty, and `approot.cpp`'s "tvicport.sys missing" message now comes from the same decision, so the message box, the status line and the refusal messages cannot drift apart. `tests/legacy_policy_tests.cpp` 20 → **27 tests**; `scripts/check_core_bootstrap.py` (**7-case self-test**) is the static guard. **The defect:** the row previously claimed "the application-level path is wired in T3", and that was false. `FANCONTROL::CoreInit()` had **no caller anywhere** — the T3 integration was real code that never ran, `CoreBridge` was always null, and every fan request ended at `"FAILED!! (core not initialised)"`. It was not merely an oversight: `CoreInit` sits in the `protected:` section of `FANCONTROL` while the startup path is a free function in `approot.cpp`, so the call that was needed **could not be written**. Fixed with a public, one-line seam (`StartCore()` / `CoreStatus()`) called at startup before `fc.Test()`, with `CoreShutdown()` before `CloseTVicPort()` so the core never outlives the driver it borrows; the no-core refusal in `SetFan` now prints the startup explanation instead of `"(core not initialised)"`. A second defect came out of the exhaustive test: `monitorOnlyForced` was set by the application and **read by nothing** — "the user chose monitor-only" was a comment. It is now part of `controlEligible()`, checked first, with `monitor_only_forced` as the blocking reason. ADR-027. **Not verified:** the startup path is Win32 and has never been compiled or run here. |
 | T5-05 | Typed EC protocol layer with IBF/OBF waits, bounded timeouts, retries | `[x]` | `core/ec_protocol.{h,cpp}`. Waits bounded by deadline **and** a derived poll ceiling, so a frozen clock still terminates (`testWaitTerminatesEvenWhenTheClockNeverAdvances`); the ceiling itself is pinned to an exact poll count (`testPollCountIsBoundedPerAttempt`) so it cannot quietly grow. Typed errors preserved across retries (`testPersistentFailureIsRetriedOnlyToTheLimit`). Insane config refused. **22 tests.** |
 | T5-06 | Fake-backend fault injection: one failed read, repeated failed reads, one failed write, wrong readback, mutex contention, backend shutdown mid-command ([TESTING.md](TESTING.md) §7) | `[x]` | `tests/fake_ec.{h,cpp}`. Transient vs. persistent failures are modelled separately (`testTransientFailureIsRetried`, `testPersistentFailureIsRetriedOnlyToTheLimit`); a backend that passes the capability probe and then denies the write is a distinct mode (`testAccessDeniedIsNotRetried`), because otherwise `AccessDenied` is unreachable. Shutdown mid-transaction is `testBackendStoppingMidTransactionIsReported`. The contention tests run 4 reader threads plus a concurrent writer, and the fake rejects any interleaved data-port read; verified clean under ThreadSanitizer. |
 | T5-07 | Stuck temperature and stale timestamp fault injection | `[x]` | `testStuckTemperatureSource` models a source whose value freezes while its timestamps keep advancing, so a freshness check cannot catch it. **Documented limitation, asserted rather than glossed over:** a uniformly stuck sensor set is not detectable from a single reading stream. What the tests do pin is the invariant that does hold — a stuck source can neither mask a hotter source nor hold the aggregate down, because the aggregate is a maximum over sources. `testStaleAndFutureTimestampsAreRejected` checks the age and skew limits on **both** sides of each boundary, since an off-by-one boundary is an untested boundary. |
@@ -252,10 +270,10 @@ environment). Every cell below was executed, not inferred:
 
 | Configuration | `core_tests` | `ec_protocol_tests` | `app_bridge_tests` | `ecdiag_tests` | `legacy_policy_tests` | `legacy_backend_tests` | `tvicport_backend_tests` | Total |
 |---|---|---|---|---|---|---|---|---|
-| `-Wall -Wextra -Werror -pedantic` | 11 | 42 | 31 | 29 | 20 | 16 | 19 | **168** |
-| `-O2 -DNDEBUG` | 11 | 42 | 31 | 29 | 20 | 16 | 19 | **168** |
-| `-fsanitize=address,undefined` | 11 | 42 | 31 | 29 | 20 | 16 | 19 | **168** |
-| `-fsanitize=thread` | 11 | 42 | 31 | 29 | 20 | 16 | 19 | **168** |
+| `-Wall -Wextra -Werror -pedantic` | 11 | 42 | 31 | 29 | 27 | 16 | 19 | **175** |
+| `-O2 -DNDEBUG` | 11 | 42 | 31 | 29 | 27 | 16 | 19 | **175** |
+| `-fsanitize=address,undefined` | 11 | 42 | 31 | 29 | 27 | 16 | 19 | **175** |
+| `-fsanitize=thread` | 11 | 42 | 31 | 29 | 27 | 16 | 19 | **175** |
 
 `core_tests` reports no count: it is the original suite and was not renumbered
 when the others were added. The other six print their own count and fail if it is

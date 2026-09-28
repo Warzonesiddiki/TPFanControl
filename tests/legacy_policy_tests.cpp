@@ -28,6 +28,7 @@ using core::LegacyFanTarget;
 using core::LegacyIntent;
 using core::LegacyRefusal;
 using core::LegacySource;
+using core::StartupMode;
 
 int testCount = 0;
 
@@ -441,6 +442,194 @@ void testDescribeRequestedLevelRejectsUnusableBuffers()
     CHECK(buffer[0] == '\0');
 }
 
+// ---------------------------------------------------------------------------
+// The startup assessment (T5-04)
+// ---------------------------------------------------------------------------
+//
+// The requirement is DRIVER_BACKENDS.md section 5: with no approved backend,
+// monitor if possible, write nothing, leave the fan to the BIOS, and explain the
+// missing dependency. "If possible" is the whole subtlety on this machine - the
+// temperature sources are EC registers, so with no backend there is nothing to
+// read at all - and the assessment is where that distinction lives.
+
+core::LegacyCapabilityInputs verifiedMachine()
+{
+    core::LegacyCapabilityInputs in;
+    in.backendPresent = true;
+    in.driverLoaded = true;
+    in.hardwareExactMatch = true;
+    in.profileVerified = true;
+    in.topologyVerified = true;
+    in.restoreCapabilityVerified = true;
+    return in;
+}
+
+void testNoBackendMeansMonitorOnlyWithNoReadings()
+{
+    noteTest();
+    // What the application does on a machine where the port driver is missing.
+    // The status line must not say "monitoring", because there is nothing to
+    // read: the legacy application's answer was to crash out of startup with a
+    // message box, and a window showing stale or zero temperatures would be
+    // worse. This says what is true.
+    core::LegacyCapabilityInputs in;
+    in.controlRequestedByUser = true;   // the user ticked control; it must not matter
+    const core::StartupAssessment a = core::assessStartup(in);
+
+    CHECK(a.mode == core::StartupMode::NoBackend);
+    CHECK(a.monitorOnly);
+    CHECK(!a.readingsAvailable);
+    CHECK(!a.mayControl);
+    CHECK(std::strstr(a.statusLine.c_str(), "MONITOR ONLY") != nullptr);
+    CHECK(std::strstr(a.statusLine.c_str(), "no readings") != nullptr);
+    CHECK(std::strstr(a.explanation.c_str(), "tvicport.sys") != nullptr);
+    CHECK(std::strstr(a.explanation.c_str(), "BIOS") != nullptr);
+    CHECK(std::strstr(a.explanation.c_str(), "No register will be written") != nullptr);
+}
+
+void testBackendObjectWithoutADriverIsStillNoBackend()
+{
+    noteTest();
+    // The two halves of "there is a working I/O path": a backend that exists,
+    // and a driver behind it. A machine where the driver was closed mid-session
+    // is the second half failing, and it has to land in the same state as never
+    // having had one - no readings, no writes.
+    core::LegacyCapabilityInputs in = verifiedMachine();
+    in.driverLoaded = false;
+    const core::StartupAssessment a = core::assessStartup(in);
+
+    CHECK(a.mode == core::StartupMode::NoBackend);
+    CHECK(!a.readingsAvailable);
+    CHECK(!a.mayControl);
+
+    core::LegacyCapabilityInputs noBackend = verifiedMachine();
+    noBackend.backendPresent = false;
+    CHECK(core::assessStartup(noBackend).mode == core::StartupMode::NoBackend);
+}
+
+void testAnUnverifiedMachineMonitorsAndSaysWhy()
+{
+    noteTest();
+    // The normal state of this project: a backend that works, and Phase 0 not
+    // done. Readings are shown; control is refused; the reason names the
+    // missing verification rather than saying "not supported".
+    core::LegacyCapabilityInputs in;
+    in.backendPresent = true;
+    in.driverLoaded = true;
+    in.controlRequestedByUser = true;
+    const core::StartupAssessment a = core::assessStartup(in);
+
+    CHECK(a.mode == core::StartupMode::MonitorOnly);
+    CHECK(a.monitorOnly);
+    CHECK(a.readingsAvailable);
+    CHECK(!a.mayControl);
+    CHECK(std::strstr(a.statusLine.c_str(), "MONITOR ONLY") != nullptr);
+    CHECK(std::strstr(a.statusLine.c_str(), "hardware_identity_unverified") != nullptr);
+    CHECK(std::strstr(a.explanation.c_str(), "BIOS") != nullptr);
+}
+
+void testAControlEligibleMachineStillDoesNotStartControllingByItself()
+{
+    noteTest();
+    // The startup assessment is not an activation. Even with every Phase 0
+    // verdict in place, control needs the user's request and the controller's
+    // consecutive-samples gate (ADR-014).
+    const core::StartupAssessment a = core::assessStartup(verifiedMachine());
+
+    CHECK(a.mode == core::StartupMode::ControlEligible);
+    CHECK(!a.monitorOnly);
+    CHECK(a.readingsAvailable);
+    CHECK(a.mayControl);
+    CHECK(std::strstr(a.statusLine.c_str(), "CONTROL ELIGIBLE") != nullptr);
+    CHECK(std::strstr(a.explanation.c_str(), "does not start by itself") != nullptr);
+}
+
+void testForcedMonitorOnlySurvivesEveryVerdict()
+{
+    noteTest();
+    // The user, or Phase 0, can force monitor-only. Nothing in the assessment
+    // may override that.
+    core::LegacyCapabilityInputs in = verifiedMachine();
+    in.monitorOnlyForced = true;
+    const core::StartupAssessment a = core::assessStartup(in);
+
+    CHECK(a.mode == core::StartupMode::MonitorOnly);
+    CHECK(a.monitorOnly);
+    CHECK(a.readingsAvailable);
+    CHECK(!a.mayControl);
+}
+
+void testTheAssessmentNeverDisagreesWithTheCapabilityReport()
+{
+    noteTest();
+    // The failure this test prevents is a second eligibility rule. The
+    // controller applies CapabilityReport::controlEligible(); if the startup
+    // path computed its own answer, the two would eventually differ, and the
+    // one the user sees would be the weaker of them.
+    //
+    // Exhaustive over the seven booleans that can matter (2^7 = 128 machines),
+    // which is possible because both functions are pure.
+    int checkedCount = 0;
+    for (unsigned mask = 0; mask < 128u; ++mask) {
+        core::LegacyCapabilityInputs in;
+        in.controlRequestedByUser   = (mask & 1u) != 0;
+        in.driverLoaded             = (mask & 2u) != 0;
+        in.backendPresent           = (mask & 4u) != 0;
+        in.hardwareExactMatch       = (mask & 8u) != 0;
+        in.profileVerified          = (mask & 16u) != 0;
+        in.topologyVerified         = (mask & 32u) != 0;
+        in.restoreCapabilityVerified= (mask & 64u) != 0;
+
+        const core::StartupAssessment a = core::assessStartup(in);
+        const bool eligible = core::makeCapabilities(in).controlEligible();
+        ++checkedCount;
+
+        // Same answer, always.
+        CHECK(a.mayControl == eligible);
+        // Control eligibility implies readings, which implies a live backend.
+        if (a.mayControl) {
+            CHECK(a.readingsAvailable);
+            CHECK(!a.monitorOnly);
+        }
+        // A machine with no readings is never controllable, and a monitor-only
+        // machine never reports a mode that could command one.
+        if (!a.readingsAvailable) {
+            CHECK(!a.mayControl);
+            CHECK(a.mode == core::StartupMode::NoBackend);
+        }
+        // Never blank: a blank status line reads as healthy.
+        CHECK(!a.statusLine.empty());
+        CHECK(!a.explanation.empty());
+
+        // The status line goes into a fixed 256-byte dialog field, after a
+        // prefix the application has already written. A status line that gets
+        // truncated mid-word would hide the part that says what is missing, so
+        // the bound is asserted here rather than discovered in a screenshot.
+        // The explanation is the long form and goes to the log, where the only
+        // limit is the disk.
+        CHECK(a.statusLine.size() <= 120);
+        CHECK(a.explanation.size() > a.statusLine.size());
+
+        // Both strings are written as single lines: a newline inside the status
+        // field would be swallowed by the dialog, and one inside a trace entry
+        // would split it in two.
+        CHECK(a.statusLine.find('\n') == std::string::npos);
+        CHECK(a.explanation.find('\n') == std::string::npos);
+    }
+    CHECK(checkedCount == 128);
+}
+
+void testStartupTextIsAlwaysPopulated()
+{
+    noteTest();
+    for (const core::StartupMode mode : {core::StartupMode::NoBackend,
+                                        core::StartupMode::MonitorOnly,
+                                        core::StartupMode::ControlEligible}) {
+        CHECK(core::toText(mode) != nullptr);
+        CHECK(core::toText(mode)[0] != '\0');
+    }
+}
+
 void runAll()
 {
     testSpecificFanRequestIsRefused();
@@ -463,6 +652,13 @@ void runAll()
     testTextIsNeverNullOrEmpty();
     testBiosLevelIsRenderedAsHexNotDecimal();
     testDescribeRequestedLevelRejectsUnusableBuffers();
+    testNoBackendMeansMonitorOnlyWithNoReadings();
+    testBackendObjectWithoutADriverIsStillNoBackend();
+    testAnUnverifiedMachineMonitorsAndSaysWhy();
+    testAControlEligibleMachineStillDoesNotStartControllingByItself();
+    testForcedMonitorOnlySurvivesEveryVerdict();
+    testTheAssessmentNeverDisagreesWithTheCapabilityReport();
+    testStartupTextIsAlwaysPopulated();
 }
 
 } // namespace

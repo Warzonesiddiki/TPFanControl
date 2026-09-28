@@ -48,6 +48,16 @@ const char* toText(LegacyRefusal refusal) noexcept
     return "unknown";
 }
 
+const char* toText(StartupMode mode) noexcept
+{
+    switch (mode) {
+    case StartupMode::NoBackend:       return "no backend";
+    case StartupMode::MonitorOnly:     return "monitor only";
+    case StartupMode::ControlEligible: return "control eligible";
+    }
+    return "unknown";
+}
+
 // ---------------------------------------------------------------------------
 // Capabilities
 // ---------------------------------------------------------------------------
@@ -73,7 +83,76 @@ CapabilityReport makeCapabilities(const LegacyCapabilityInputs& in)
     // a fallback. An unverifiable restore counts as no restore.
     report.restoreAvailable = in.restoreCapabilityVerified;
 
+    // And a person can hold the machine in monitor-only mode regardless of what
+    // the verdicts say. Reported through the same structure so that there is one
+    // answer to "may this machine be controlled".
+    report.monitorOnlyForced = in.monitorOnlyForced;
+
     return report;
+}
+
+// ---------------------------------------------------------------------------
+// The startup assessment (T5-04)
+// ---------------------------------------------------------------------------
+namespace {
+
+// The dependency the user has to install, in the words the user needs. Named
+// here rather than in the dialog code so the message cannot drift between the
+// startup path and the status line.
+const char* kMissingBackendDependency =
+    "the TVicPort port driver (tvicport.sys) is not loaded";
+
+} // namespace
+
+StartupAssessment assessStartup(const LegacyCapabilityInputs& in)
+{
+    StartupAssessment assessment;
+
+    // One source of truth for eligibility. If this function recomputed the
+    // rule, the application would be asking the weaker of two answers.
+    const CapabilityReport capabilities = makeCapabilities(in);
+    assessment.mayControl = capabilities.controlEligible();
+
+    // Is there an I/O path at all? Both halves matter: a backend object with no
+    // driver behind it cannot read anything, and a driver with no backend is
+    // not something the core can use.
+    const bool haveBackend = in.backendPresent && in.driverLoaded;
+
+    if (!haveBackend) {
+        assessment.mode = StartupMode::NoBackend;
+        assessment.monitorOnly = true;
+        assessment.readingsAvailable = false;
+        assessment.statusLine = "MONITOR ONLY - no readings available";
+        assessment.explanation =
+            "No backend is available: " + std::string(kMissingBackendDependency) +
+            ". Temperatures and fan speed come from the embedded controller, so "
+            "with no backend there is nothing to read and nothing to display. "
+            "No register will be written. The fan remains under firmware (BIOS) "
+            "control.";
+        return assessment;
+    }
+
+    assessment.readingsAvailable = true;
+
+    if (assessment.mayControl) {
+        assessment.mode = StartupMode::ControlEligible;
+        assessment.monitorOnly = false;
+        assessment.statusLine = "CONTROL ELIGIBLE - awaiting consecutive valid readings";
+        assessment.explanation =
+            "The backend is ready and every Phase 0 verdict for this machine "
+            "holds. Control still does not start by itself: it needs an explicit "
+            "request and the controller's own consecutive-samples gate.";
+        return assessment;
+    }
+
+    assessment.mode = StartupMode::MonitorOnly;
+    assessment.monitorOnly = true;
+    assessment.statusLine = "MONITOR ONLY - " + capabilities.blockingReason();
+    assessment.explanation =
+        "Readings are available and are shown. Control is not approved for this "
+        "machine, so no register will be written: " + capabilities.blockingReason() +
+        ". The fan remains under firmware (BIOS) control.";
+    return assessment;
 }
 
 // ---------------------------------------------------------------------------

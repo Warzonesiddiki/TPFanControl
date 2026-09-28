@@ -222,6 +222,24 @@ class FANCONTROL
 		// from a decision with no reason, so it is a string and not a flag.
 		std::string LastCoreReason;
 
+		// T5-04. What the core decided at startup: whether there is an I/O path
+		// at all, whether readings are available, whether control is approved,
+		// and the two strings the UI shows.
+		//
+		// It is set by CoreInit and is always valid afterwards, including when
+		// CoreInit failed - that is the case it exists for. With no backend the
+		// application is in monitor-only mode with nothing to read, and the user
+		// has to be told why rather than shown an empty window.
+		tpfancontrol::core::StartupAssessment CoreStartup;
+
+		// True when the core may not write any register, which is the case in
+		// both monitor-only modes. Never a fault: this machine is being used
+		// exactly as intended until a hardware report exists (Phase 0).
+		bool CoreMonitorOnly() const noexcept;
+
+		// Protected, and deliberately not called from outside the class: it
+		// touches the core member by member, and its caller would then have to
+		// keep them in step. StartCore() is the public seam.
 		// Builds CoreBackend and CoreBridge against the current EC primitives.
 		// Returns false if the port driver is not open, in which case the
 		// application runs monitor-only and writes nothing.
@@ -316,6 +334,25 @@ class FANCONTROL
 		void Test(void);
 
 		int ProcessDialog();
+
+        // T5-04. Bring the portable core up against the port driver that is
+        // open, and record what it decided.
+        //
+        // Public, and this is the point: CoreInit existed for a whole task
+        // without a caller, because it sits in the protected section and the
+        // startup path (approot.cpp) is not a member function. Nothing in the
+        // tree could tell that the core was never constructed in the shipped
+        // application - every fan request simply answered "core not
+        // initialised".
+        //
+        // Returns false when the core could not be built, in which case the
+        // application is monitor-only and writes nothing. Never called before
+        // the port driver is open.
+        bool StartCore();
+
+        // T5-04. What the core decided at startup. Valid after StartCore(),
+        // including when it failed - that is the case it exists for.
+        const tpfancontrol::core::StartupAssessment& CoreStatus() const noexcept;
 
         HWND GetDialogWnd() { return hwndDialog; }
 		HANDLE GetWorkThread() { return hThread; }
