@@ -1,4 +1,4 @@
-﻿#include "../fancontrol/core/controller.h"
+#include "../fancontrol/core/controller.h"
 #include "../fancontrol/core/sensor_validation.h"
 
 // assert is compiled out by NDEBUG, which Release defines, so a Release build
@@ -542,6 +542,226 @@ void testStaleAndFutureTimestampsAreRejected()
     CHECK(!validateTemperature(failed, now, policy).valid);
 }
 
+void testConsecutiveSamplesMustAgree()
+{
+    ControllerConfig config = testControllerConfig();
+    config.startupValidSamples = 3;
+    config.maximumSensorAgreementDeltaC = 10;
+    Controller controller(config);
+
+    ControllerInput input;
+    input.capabilities = eligible();
+    input.requestControl = true;
+
+    // Three valid samples that do NOT agree: 10, 70, 20 -> diffs 60,50 >10
+    input.nowMs = 0;
+    input.temperatures = {temperature(10, 0)};
+    ControllerOutput out = controller.update(input);
+    CHECK(out.safetyState == SafetyState::Validating);
+
+    input.nowMs = 100;
+    input.temperatures = {temperature(70, 100)};
+    out = controller.update(input);
+    CHECK(out.safetyState == SafetyState::Validating);
+
+    input.nowMs = 200;
+    input.temperatures = {temperature(20, 200)};
+    out = controller.update(input);
+    // Agreement failed, should reset and stay validating
+    CHECK(out.safetyState == SafetyState::Validating);
+    CHECK(out.reasonCode == "sensor_agreement_failed");
+
+    // Now three agreeing samples: 40,42,44 -> diffs 2,2 <=10
+    input.nowMs = 300;
+    input.temperatures = {temperature(40, 300)};
+    out = controller.update(input);
+    CHECK(out.safetyState == SafetyState::Validating);
+
+    input.nowMs = 400;
+    input.temperatures = {temperature(42, 400)};
+    out = controller.update(input);
+    CHECK(out.safetyState == SafetyState::Validating);
+
+    input.nowMs = 500;
+    input.temperatures = {temperature(44, 500)};
+    out = controller.update(input);
+    CHECK(out.safetyState == SafetyState::Controlled);
+}
+
+void testOscillationDoesNotPumpFan()
+{
+    ControllerConfig config = testControllerConfig();
+    config.startupValidSamples = 3;
+    config.maximumSensorAgreementDeltaC = 10;
+    Controller controller(config);
+
+    ControllerInput input;
+    input.capabilities = eligible();
+    input.requestControl = true;
+
+    const int sequence[] = {10, 70, 20, 75, 40};
+    std::uint64_t now = 0;
+    for (int temp : sequence) {
+        input.nowMs = now;
+        input.temperatures = {temperature(temp, now)};
+        ControllerOutput out = controller.update(input);
+        // Must never leave Validating, so no fan command
+        CHECK(out.safetyState == SafetyState::Validating);
+        CHECK(out.command.kind == CommandKind::None);
+        now += 100;
+    }
+}
+
+void testSingleSourceLossContinuesOnOthers()
+{
+    // hottestValidTemperature takes max over valid sources.
+    SensorPolicy policy;
+    policy.minimumPlausibleC = 0;
+    policy.maximumPlausibleC = 110;
+    policy.maximumAgeMs = 10000;
+    policy.maximumFutureSkewMs = 1000;
+
+    const std::uint64_t now = 1000;
+    TemperatureSample valid1 = temperature(60, now);
+    valid1.source = "sensor1";
+    TemperatureSample invalid;
+    invalid.hasValue = false;
+    invalid.source = "sensor2";
+    invalid.timestampMs = now;
+
+    std::vector<TemperatureSample> samples = {valid1, invalid};
+    ValidatedTemperature hottest = hottestValidTemperature(samples, now, policy);
+    CHECK(hottest.valid);
+    CHECK(hottest.valueC == 60);
+
+    // Both invalid -> not valid
+    samples = {invalid, invalid};
+    hottest = hottestValidTemperature(samples, now, policy);
+    CHECK(!hottest.valid);
+}
+
+void testFailsafeLatchRequiresAckAndCooldown()
+{
+    ControllerConfig config = testControllerConfig();
+    config.startupValidSamples = 2;
+    config.failsafeCooldownMs = 1000;
+    Controller controller(config);
+
+    ControllerInput input;
+    input.capabilities = eligible();
+    input.requestControl = true;
+    input.nowMs = 0;
+    input.temperatures = {temperature(50, 0)};
+    controller.update(input);
+    input.nowMs = 100;
+    input.temperatures = {temperature(50, 100)};
+    ControllerOutput out = controller.update(input);
+    CHECK(out.safetyState == SafetyState::Controlled);
+
+    // Trigger failsafe via backend failure
+    input.backendFailure = true;
+    input.nowMs = 200;
+    out = controller.update(input);
+    CHECK(out.safetyState == SafetyState::FailsafeBios);
+    CHECK(out.reasonCode == "backend_failure");
+
+    // Try to clear without ack -> stays latched
+    input.backendFailure = false;
+    input.nowMs = 300;
+    input.temperatures = {temperature(50, 300)};
+    out = controller.update(input);
+    CHECK(out.safetyState == SafetyState::FailsafeBios);
+    CHECK(out.reasonCode == "safety_latched");
+
+    // Ack but no cooldown yet -> cooldown
+    input.requestBiosAutomatic = true;
+    input.nowMs = 400;
+    out = controller.update(input);
+    CHECK(out.safetyState == SafetyState::FailsafeBios);
+    // After ack, reason should be bios or cooldown
+    CHECK(out.reasonCode == "safety_latched_bios" || out.reasonCode == "safety_latched_cooldown" || out.reasonCode == "safety_latched_awaiting_valid");
+
+    // Ack + valid temp, but cooldown not elapsed
+    input.requestBiosAutomatic = false;
+    input.nowMs = 500;
+    input.temperatures = {temperature(50, 500)};
+    out = controller.update(input);
+    // Should be in cooldown
+    CHECK(out.safetyState == SafetyState::FailsafeBios);
+    CHECK(out.reasonCode == "safety_latched_cooldown" || out.reasonCode == "safety_latched_cooldown_done_awaiting_request" || out.reasonCode == "safety_latched_bios");
+
+    // Advance time past cooldown, but no re-request yet -> awaiting request
+    // Clear control request to test awaiting state
+    input.requestControl = false;
+    input.nowMs = 1600; // 500 + 1100 > 1000 cooldown
+    input.temperatures = {temperature(50, 1600)};
+    out = controller.update(input);
+    CHECK(out.safetyState == SafetyState::FailsafeBios);
+    CHECK(out.reasonCode == "safety_latched_cooldown_done_awaiting_request");
+
+    // Now re-request control after cooldown -> should clear latch and go to validating
+    input.requestControl = true;
+    input.nowMs = 1700;
+    input.temperatures = {temperature(50, 1700)};
+    out = controller.update(input);
+    // After clearing latch, it should be Validating (needs consecutive samples)
+    CHECK(out.safetyState == SafetyState::Validating || out.safetyState == SafetyState::Controlled);
+}
+
+void testRepeatedSuspectEscalation()
+{
+    ControllerConfig config = testControllerConfig();
+    config.startupValidSamples = 2;
+    config.maximumSensorAgreementDeltaC = 20;
+    config.rpmSupported = true;
+    config.suspectThreshold = 3;
+    config.fanRpm.maximumPlausible = 10000;
+    config.fanRpm.minimumPlausible = 0;
+    config.fanRpm.maximumAgeMs = 10000;
+    config.fanRpm.maximumFutureSkewMs = 1000;
+    Controller controller(config);
+
+    ControllerInput input;
+    input.capabilities = eligible();
+    input.requestControl = true;
+    input.nowMs = 0;
+    input.temperatures = {temperature(60, 0)};
+    controller.update(input);
+    input.nowMs = 100;
+    input.temperatures = {temperature(60, 100)};
+    ControllerOutput out = controller.update(input);
+    CHECK(out.safetyState == SafetyState::Controlled);
+    // At 60C, curve gives level 3 (>0)
+
+    // Now simulate fan commanded >0 but RPM 0, with observation elapsed
+    input.hasFanRpm = true;
+    input.fanRpm = 0;
+    input.timestampMs = input.nowMs;
+    input.rpmObservationElapsed = true;
+
+    // First suspect
+    input.nowMs = 200;
+    input.temperatures = {temperature(60, 200)};
+    input.timestampMs = input.nowMs;
+    out = controller.update(input);
+    CHECK(out.fanHealth == FanHealth::Suspect);
+
+    // Second suspect
+    input.nowMs = 300;
+    input.temperatures = {temperature(60, 300)};
+    input.timestampMs = input.nowMs;
+    out = controller.update(input);
+    CHECK(out.fanHealth == FanHealth::Suspect);
+
+    // Third suspect -> should escalate to Failed and trigger failsafe
+    input.nowMs = 400;
+    input.temperatures = {temperature(60, 400)};
+    input.timestampMs = input.nowMs;
+    out = controller.update(input);
+    CHECK(out.fanHealth == FanHealth::Failed);
+    CHECK(out.safetyState == SafetyState::FailsafeBios);
+}
+
 } // namespace
 
 int main()
@@ -557,6 +777,11 @@ int main()
     testImplausibleRpmIsNotReportedHealthy();
     testStuckTemperatureSource();
     testStaleAndFutureTimestampsAreRejected();
+    testConsecutiveSamplesMustAgree();
+    testOscillationDoesNotPumpFan();
+    testSingleSourceLossContinuesOnOthers();
+    testFailsafeLatchRequiresAckAndCooldown();
+    testRepeatedSuspectEscalation();
     std::cout << "TPFanControl portable core tests passed\n";
     return 0;
 }

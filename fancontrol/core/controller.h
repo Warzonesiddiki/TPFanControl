@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "fan_curve.h"
 #include "sensor_validation.h"
@@ -43,6 +43,19 @@ struct ControllerConfig {
     // Plausibility bounds for tachometer readings. Only consulted when
     // rpmSupported is true. See FanRpmPolicy: these are candidate values.
     FanRpmPolicy fanRpm;
+
+    // T2-12 / ADR-030. Maximum allowed absolute difference between consecutive
+    // maximum-temperature samples in the startup window. Candidate value, not
+    // hardware evidence; Phase 0 must measure real slew rates.
+    int maximumSensorAgreementDeltaC = 10;
+
+    // T2-12 / ADR-030. Cooldown after failsafe ack before control may resume.
+    // Candidate, not measured.
+    std::uint64_t failsafeCooldownMs = 30000;
+
+    // T2-12 / ADR-030. Consecutive Suspect fan-health evaluations before
+    // escalating to Failed. Candidate.
+    std::uint32_t suspectThreshold = 3;
 };
 
 struct ControllerInput {
@@ -133,6 +146,17 @@ private:
     FanCommand latchedCommand_;
     FanCommand lastCommand_;
 
+    // T2-01 / ADR-030. Recent maximum temperatures for agreement check.
+    std::vector<int> recentMaxTemps_;
+
+    // T2-03 / ADR-030. Failsafe ack and cooldown tracking.
+    bool failsafeAcked_ = false;
+    std::uint64_t failsafeAckTimeMs_ = 0;
+    std::uint64_t failsafeCooldownStartMs_ = 0;
+
+    // T2-04 / ADR-030. Consecutive suspect fan-health samples.
+    std::uint32_t consecutiveSuspectSamples_ = 0;
+
     ControllerOutput makeBaseOutput(
         const ControllerInput& input,
         const ValidatedTemperature& temperature) const;
@@ -143,7 +167,7 @@ private:
         const char* reason);
     FanHealth evaluateFanHealth(
         const ControllerInput& input,
-        const FanCommand& command) const;
+        const FanCommand& command);
 };
 
 } // namespace core
