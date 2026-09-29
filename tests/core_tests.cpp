@@ -1,4 +1,5 @@
 #include "../fancontrol/core/controller.h"
+#include "../fancontrol/core/events.h"
 #include "../fancontrol/core/sensor_validation.h"
 
 // assert is compiled out by NDEBUG, which Release defines, so a Release build
@@ -63,6 +64,35 @@ ControllerConfig testControllerConfig()
     config.manualMaximumLevel = 7;
     config.emergencyTemperatureC = 80;
     return config;
+}
+
+class TestEventSink final : public IEventSink {
+public:
+    bool accepted = false;
+    CoreEvent last;
+
+    bool tryEmit(const CoreEvent& event) noexcept override
+    {
+        last = event;
+        accepted = true;
+        return accepted;
+    }
+};
+
+void testEventInterfaceContract()
+{
+    TestEventSink sink;
+    CoreEvent event;
+    event.timestampMs = 1234;
+    event.code = EventCode::FailsafeEntered;
+    event.severity = EventSeverity::Critical;
+    event.hasValue = true;
+    event.value = 42;
+    CHECK(sink.tryEmit(event));
+    CHECK(sink.last.timestampMs == 1234);
+    CHECK(sink.last.code == EventCode::FailsafeEntered);
+    CHECK(sink.last.severity == EventSeverity::Critical);
+    CHECK(sink.last.hasValue && sink.last.value == 42);
 }
 
 void testCurveValidationAndHysteresis()
@@ -766,6 +796,7 @@ void testRepeatedSuspectEscalation()
 
 int main()
 {
+    testEventInterfaceContract();
     testCurveValidationAndHysteresis();
     testSensorValidation();
     testDefaultDoesNotStartControl();

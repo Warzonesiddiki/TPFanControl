@@ -1298,3 +1298,40 @@ jumps that are not real?). Replace 10 °C and 30 s with measured values, and
 record them in the hardware report. If a second independent temperature source
 (e.g., CPU MSR) is added, agreement should be checked across sources as well
 as across time.
+
+## ADR-031 — Portable core event interface is typed, bounded, and non-blocking
+
+**Status:** Accepted (T2-13)
+
+**Context.** The portable core needs a stable event contract before it emits
+structured safety and command events (T2-05). Log formatting, persistence,
+rotation, and UI presentation belong to adapters, not the control algorithm.
+Events must not become a source of unbounded memory use, blocking I/O, or
+sensitive-data leakage.
+
+**Decision.** `fancontrol/core/events.h` defines `CoreEvent`, `EventCode`,
+`EventSeverity`, and `IEventSink`. Event values are fixed-size and contain a
+monotonic timestamp, stable code/severity, and two code-specific integer slots
+with an explicit known-value flag. The core contract carries no free-form text,
+identity, paths, raw EC values, or wall-clock timestamps. Codes cover backend
+initialization, profile activation, fan command and readback, failsafe,
+maximum temperature, shutdown restore, and configuration validation.
+
+A sink's `tryEmit` must be bounded-capacity, non-blocking, and `noexcept`.
+Returning `false` means an event was dropped; the producer must not retry in
+the control path and event loss must never change a safety or fan decision. The
+sink is responsible for exposing its dropped count. File writes, rotation,
+formatting, and UI work happen outside the control path. No concrete sink or
+event emission is claimed by this decision; these are T2-05 and later adapter
+work.
+
+**Consequences.** The interface can be implemented and tested portably, while
+storage and presentation remain replaceable. The fixed-size contract bounds
+per-event memory but does not itself provide a bounded queue; every sink must
+supply that bound and report drops. A dropped event is not proof that an event
+did not occur, and logs are not an authoritative audit trail.
+
+**Evidence.** The interface is declared in `fancontrol/core/events.h` and the
+privacy, non-blocking, overflow, and ownership rules are recorded here and in
+`docs/OBSERVABILITY.md`. No Windows, persistence, or hardware verification is
+claimed.

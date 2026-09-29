@@ -21,8 +21,8 @@ Legend:
 | Measure | Value |
 |---|---|
 | Documented safety gaps closed | 9 of 10 (gaps 1, 2, 3, 4, 5, 6, 7, 8, 9-escalation) — gap 9 stuck-set and gap 10 logging remain open |
-| Portable-core test functions | 16 core + 42 EC + 35 bridge + 29 ecdiag + 38 policy + 16 backend + 19 TVicPort = 195, plus self-tests for the six checkers (`check_ecdiag_readonly.py`, `check_project_sources.py`, `check_ci_steps.py`, `check_legacy_ec_selftest.py`, `check_core_bootstrap.py`, `check_dependencies.py`) |
-| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5: 01, 04, 05, 06, 07, 08, 09, 10, 11 complete, 02 blocked, 03 gated on it. T3: 11 of 12 complete, T3-02 in progress (the display read path). T2: 01, 02, 03, 04, 06, 07, 08, 09, 10, 11, 12, 14 complete, 05, 13 blocked |
+| Portable-core test functions | 17 core + 42 EC + 35 bridge + 29 ecdiag + 38 policy + 16 backend + 19 TVicPort = 196, plus self-tests for the six checkers (`check_ecdiag_readonly.py`, `check_project_sources.py`, `check_ci_steps.py`, `check_legacy_ec_selftest.py`, `check_core_bootstrap.py`, `check_dependencies.py`) |
+| Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5: 01, 04, 05, 06, 07, 08, 09, 10, 11 complete, 02 blocked, 03 gated on it. T3: 11 of 12 complete, T3-02 in progress (the display read path). T2: 01, 02, 03, 04, 06, 07, 08, 09, 10, 11, 12, 13, 14 complete; 05 open |
 | Critical path | T0 → T1 → T5 → T3 → T4 → T6 → T8 |
 | Biggest single risk | The startup path cannot be executed here. T5-04 found that the core *was* disconnected — `CoreInit()` had no caller and `CoreBridge` was always null — and fixed it by wiring `StartCore()` into `approot.cpp`; the risk that remains is that the wiring is a static property, checked by `check_core_bootstrap.py`, not a build: no MSVC, no Windows, no run. The first evidence that the application starts the core will come from T1-11. |
 
@@ -97,7 +97,7 @@ are verified locally. Tasks are promoted to `[x]` only when a CI run supplies ev
 | T2-10 | Test: manual override expires and is cancelled by invalid sensor data | `[x]` | `testControllerGatesAndManualExpiry`, `testCapabilityAndFailureGates` |
 | T2-11 | Test: emergency threshold is authoritative and validated | `[x]` | `testEmergencyThresholdValidation` |
 | T2-12 | Record the sensor-agreement and failsafe-recovery policy decisions | `[x]` | ADR-030: sensor agreement (consecutive-difference ≤10°C over 3 samples), single-source loss continues on remaining sources, failsafe cooldown 30s + explicit ack + re-request. Unblocks T2-01, T2-02, T2-03. |
-| T2-13 | Define the portable core's event/logging interface | `[ ]` | Blocks T2-05 and much of T7 |
+| T2-13 | Define the portable core's event/logging interface | `[x]` | ADR-031; `fancontrol/core/events.h` defines fixed-size typed events and a non-blocking sink contract. `testEventInterfaceContract` validates the portable API. No event emission or concrete sink claimed; T2-05 remains open. |
 | T2-14 | Keep the curve validator and the controller's runtime curve in agreement | `[x]` | `testCurveShapeValidation`, `testCurveValidationAndHysteresis` |
 
 ---

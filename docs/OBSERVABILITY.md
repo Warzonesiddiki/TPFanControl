@@ -38,6 +38,8 @@ Use structured events with a timestamp, event code, severity, and redacted conte
 
 Event text is for humans; event codes are for tests and support tooling.
 
+The portable event contract is `fancontrol/core/events.h` (ADR-031). Events are fixed-size typed values with monotonic timestamps; they contain no free-form strings, user identity, paths, raw EC bytes, or wall-clock time. The core sends them through `IEventSink::tryEmit`, which adapters must implement with bounded capacity, non-blocking behavior, and no exceptions. A rejected event is dropped and counted by the sink; producers do not retry, and log pressure must never change control behavior. Formatting and persistence are adapter responsibilities. This contract does not claim that a sink or event emission is implemented.
+
 ## 3. Log policy
 
 - Use a bounded rotating log.
