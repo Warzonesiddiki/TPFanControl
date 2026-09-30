@@ -1,4 +1,4 @@
-﻿# Implementation checklist
+# Implementation checklist
 
 Use this file as the project execution board. It is the **single source of truth** for
 what is actually done. Do not mark an item complete without its evidence.
@@ -97,7 +97,7 @@ are verified locally. Tasks are promoted to `[x]` only when a CI run supplies ev
 | T2-10 | Test: manual override expires and is cancelled by invalid sensor data | `[x]` | `testControllerGatesAndManualExpiry`, `testCapabilityAndFailureGates` |
 | T2-11 | Test: emergency threshold is authoritative and validated | `[x]` | `testEmergencyThresholdValidation` |
 | T2-12 | Record the sensor-agreement and failsafe-recovery policy decisions | `[x]` | ADR-030: sensor agreement (consecutive-difference ≤10°C over 3 samples), single-source loss continues on remaining sources, failsafe cooldown 30s + explicit ack + re-request. Unblocks T2-01, T2-02, T2-03. |
-| T2-13 | Define the portable core's event/logging interface | `[x]` | ADR-031; `fancontrol/core/events.h` defines fixed-size typed events and a non-blocking sink contract. `testEventInterfaceContract` validates the portable API. No event emission or concrete sink claimed; T2-05 remains open. |
+| T2-13 | Define the portable core's event/logging interface | `[x]` | ADR-031; `fancontrol/core/events.h` defines fixed-size typed events, a four-entry output batch, and a non-blocking sink contract. `testEventInterfaceContract` validates the portable API, capacity, and overflow counting. No concrete sink or persistent logging claimed. |
 | T2-14 | Keep the curve validator and the controller's runtime curve in agreement | `[x]` | `testCurveShapeValidation`, `testCurveValidationAndHysteresis` |
 
 ---
