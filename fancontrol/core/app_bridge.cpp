@@ -1,4 +1,4 @@
-﻿#include "app_bridge.h"
+#include "app_bridge.h"
 
 #include <utility>
 
@@ -118,6 +118,38 @@ IoResult AppBridge::readTemperatureBlock(
         return read;
     }
     return IoResult::success();
+}
+
+DisplayRegisterReadResult AppBridge::readDisplayRegisters(
+    const DisplayReadOptions& options)
+{
+    DisplayRegisterReadResult result;
+    const DisplayReadPlan plan = makeDisplayReadPlan(options);
+    if (plan.variant == DisplayReadVariant::TwrBlock) {
+        return result;
+    }
+
+    for (std::size_t i = 0; i < plan.registerCount; ++i) {
+        std::uint8_t value = 0;
+        const std::uint8_t address = plan.registerAddresses[i];
+        const IoResult read = bus_.readRegister(address, value);
+        if (!read.ok) {
+            result.failedAddress = address;
+            return result;
+        }
+        ++result.registersRead;
+        if (i == 0) {
+            result.fanLevel = value;
+        } else if (i == 1) {
+            result.fanSpeedLow = value;
+        } else if (i == 2) {
+            result.fanSpeedHigh = value;
+        } else {
+            result.rawTemperatures[i - 3] = value;
+        }
+    }
+    result.ok = true;
+    return result;
 }
 
 EcSnapshot AppBridge::read(std::uint64_t nowMs)

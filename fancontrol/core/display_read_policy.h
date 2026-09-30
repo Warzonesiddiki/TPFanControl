@@ -37,6 +37,16 @@ struct DisplayReadPlan {
     std::uint32_t retryDelayMs = 200;
 };
 
+struct DisplayRegisterReadResult {
+    bool ok = false;
+    std::uint8_t fanLevel = 0;
+    std::uint8_t fanSpeedLow = 0;
+    std::uint8_t fanSpeedHigh = 0;
+    std::array<std::uint8_t, 12> rawTemperatures{};
+    std::size_t registersRead = 0;
+    std::uint8_t failedAddress = 0;
+};
+
 // Builds the normal register-read sequence from ReadEcRaw: fan control, the
 // two tachometer bytes, then eight internal and (unless disabled) four
 // external temperature registers. TWR supplies temperatures through its

@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "controller.h"
+#include "display_read_policy.h"
 #include "ec_protocol.h"
 #include "io_backend.h"
 
@@ -138,6 +139,11 @@ public:
 
     // Reads the fan level, tachometer and every temperature sensor.
     EcSnapshot read(std::uint64_t nowMs);
+
+    // Reads the legacy display register set using the same portable EC bus.
+    // TWR's non-register block protocol is intentionally unsupported here.
+    DisplayRegisterReadResult readDisplayRegisters(
+        const DisplayReadOptions& options);
 
     // Convenience: read, then build the controller input, then update.
     ControllerOutput cycle(std::uint64_t nowMs, const ControllerInput& request);

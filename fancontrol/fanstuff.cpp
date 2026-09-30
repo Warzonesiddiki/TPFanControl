@@ -985,7 +985,40 @@ FANCONTROL::ReadEcRaw(FCSTATE *pfcstate)
 	pfcstate->FanCtrl= -1;
 	memset(pfcstate->Sensors, 0, sizeof(pfcstate->Sensors));
 
-	
+	// T3-02. The normal display path now reads through AppBridge/EcBus,
+	// serialised by the EcAccess lock held by ReadEcStatus. TWR uses its own
+	// block protocol below and deliberately remains on the legacy path.
+	if (!this->UseTWR && this->CoreBridge) {
+		tpfancontrol::core::DisplayReadOptions options;
+		options.noExternalSensors= this->NoExtSensor != 0;
+		options.showBiasedTemperatures= this->ShowBiasedTemps != 0;
+		for (int i = 0; i < 12; ++i)
+			options.sensorOffsets[static_cast<std::size_t>(i)]= this->SensorOffset[i];
+
+		const tpfancontrol::core::DisplayRegisterReadResult display =
+			this->CoreBridge->readDisplayRegisters(options);
+		if (!display.ok) {
+			this->Trace("failed to read display registers through the core EC bus");
+			return 0;
+		}
+
+		pfcstate->FanCtrl= static_cast<char>(display.fanLevel);
+		pfcstate->FanSpeedLo= static_cast<char>(display.fanSpeedLow);
+		pfcstate->FanSpeedHi= static_cast<char>(display.fanSpeedHigh);
+		const std::array<tpfancontrol::core::DisplayTemperature, 12> mapped =
+			tpfancontrol::core::mapRegisterDisplayTemperatures(
+				display.rawTemperatures, options);
+		for (int i = 0; i < 12; ++i) {
+			const std::size_t index= static_cast<std::size_t>(i);
+			pfcstate->SensorAddr[i]= mapped[index].registerAddress;
+			pfcstate->SensorName[i]= (i >= 8 && this->NoExtSensor)
+				? "n/a" : this->gSensorNames[i];
+			if (mapped[index].available)
+				pfcstate->Sensors[i]= static_cast<char>(mapped[index].valueC);
+		}
+		return 1;
+	}
+
 	ok= ReadByteFromEC(TP_ECOFFSET_FAN, &pfcstate->FanCtrl);
 
 	if (ok)

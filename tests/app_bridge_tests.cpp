@@ -174,6 +174,51 @@ void testReadPopulatesEverySensor()
     CHECK(bridge.writeTrace().size() == expectedTrace);
 }
 
+void testDisplayRegisterReaderHonorsNormalAndNoExternalLayouts()
+{
+    noteTest();
+    const core::EcBusConfig busConfig;
+    FakeEcBackend backend(busConfig);
+    loadHealthyMachine(backend);
+    FakeClock clock;
+    AppBridge bridge(backend, clock, bridgeConfig());
+
+    core::DisplayReadOptions options;
+    const core::DisplayRegisterReadResult all = bridge.readDisplayRegisters(options);
+    CHECK(all.ok);
+    CHECK(all.registersRead == 15);
+    CHECK(all.fanLevel == 0x80);
+    CHECK(all.fanSpeedLow == 0x80);
+    CHECK(all.fanSpeedHigh == 0x0C);
+    CHECK(all.rawTemperatures[0] == 45);
+    CHECK(all.rawTemperatures[8] == 40);
+    CHECK(backend.writtenRegisters().empty());
+    CHECK(bridge.writeTrace().size() == 30);
+
+    core::DisplayReadOptions withoutExternal;
+    withoutExternal.noExternalSensors = true;
+    const core::DisplayRegisterReadResult internal =
+        bridge.readDisplayRegisters(withoutExternal);
+    CHECK(internal.ok);
+    CHECK(internal.registersRead == 11);
+    CHECK(internal.rawTemperatures[7] == 45);
+    CHECK(backend.writtenRegisters().empty());
+
+    backend.setPersistentReadFailure(true);
+    const core::DisplayRegisterReadResult failed =
+        bridge.readDisplayRegisters(withoutExternal);
+    CHECK(!failed.ok);
+    CHECK(failed.failedAddress == core::kRegisterFanLevel);
+    backend.setPersistentReadFailure(false);
+
+    core::DisplayReadOptions twr;
+    twr.useTwr = true;
+    const core::DisplayRegisterReadResult unsupported =
+        bridge.readDisplayRegisters(twr);
+    CHECK(!unsupported.ok);
+    CHECK(unsupported.registersRead == 0);
+}
+
 void testFanSpeedIsLittleEndian()
 {
     noteTest();
@@ -1098,6 +1143,7 @@ void runAll()
 
     // reading
     testReadPopulatesEverySensor();
+    testDisplayRegisterReaderHonorsNormalAndNoExternalLayouts();
     testFanSpeedIsLittleEndian();
     testPartialReadIsNotReportedAsSuccess();
     testBackendStoppingPartWayIsNotSuccess();
