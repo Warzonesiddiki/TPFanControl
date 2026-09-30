@@ -1,4 +1,5 @@
 #include "../fancontrol/core/controller.h"
+#include "../fancontrol/core/display_read_policy.h"
 #include "../fancontrol/core/events.h"
 #include "../fancontrol/core/sensor_validation.h"
 
@@ -164,6 +165,65 @@ void testShutdownRestoreEventIsProposalNotProof()
     for (std::size_t i = 0; i < output.events.count; ++i) {
         CHECK(output.events.events[i].code != EventCode::ShutdownRestore);
     }
+}
+
+void testDisplayReadPolicyVariantsAndMapping()
+{
+    DisplayReadOptions options;
+    DisplayReadPlan plan = makeDisplayReadPlan(options);
+    CHECK(plan.variant == DisplayReadVariant::RegisterSensors);
+    CHECK(plan.registerCount == 15);
+    CHECK(plan.registerAddresses[0] == 0x2F);
+    CHECK(plan.registerAddresses[1] == 0x84);
+    CHECK(plan.registerAddresses[2] == 0x85);
+    CHECK(plan.registerAddresses[3] == 0x78);
+    CHECK(plan.registerAddresses[10] == 0x7F);
+    CHECK(plan.registerAddresses[11] == 0xC0);
+    CHECK(plan.registerAddresses[14] == 0xC3);
+    CHECK(plan.maximumWholeReadAttempts == 3);
+    CHECK(plan.retryDelayMs == 200);
+
+    std::array<std::uint8_t, 12> raw{};
+    for (std::size_t i = 0; i < raw.size(); ++i) {
+        raw[i] = static_cast<std::uint8_t>(30 + i);
+        options.sensorOffsets[i] = static_cast<int>(i);
+    }
+    options.showBiasedTemperatures = true;
+    auto mapped = mapRegisterDisplayTemperatures(raw, options);
+    CHECK(mapped[0].available && mapped[0].valueC == 30);
+    CHECK(mapped[7].registerAddress == 0x7F && mapped[7].valueC == 30);
+    CHECK(mapped[8].registerAddress == 0xC0 && mapped[8].valueC == 30);
+
+    options.noExternalSensors = true;
+    plan = makeDisplayReadPlan(options);
+    CHECK(plan.variant == DisplayReadVariant::RegisterSensorsWithoutExternal);
+    CHECK(plan.registerCount == 11);
+    mapped = mapRegisterDisplayTemperatures(raw, options);
+    CHECK(mapped[7].available);
+    CHECK(!mapped[8].available && !mapped[11].available);
+
+    options.useTwr = true;
+    plan = makeDisplayReadPlan(options);
+    CHECK(plan.variant == DisplayReadVariant::TwrBlock);
+    CHECK(plan.registerCount == 3);
+    CHECK(plan.maximumWholeReadAttempts == 3);
+    CHECK(plan.maximumTwrAttempts == 2);
+    std::array<std::uint8_t, 16> twr{};
+    for (std::size_t i = 0; i < twr.size(); ++i) {
+        twr[i] = static_cast<std::uint8_t>(i);
+    }
+    // The legacy TWR branch ignores both options, so keep them enabled here.
+    options.noExternalSensors = true;
+    options.showBiasedTemperatures = true;
+    options.sensorOffsets.fill(20);
+    mapped = mapTwrDisplayTemperatures(twr, options);
+    CHECK(mapped[11].available);
+    CHECK(mapped[4].valueC == 4);
+    CHECK(mapped[5].valueC == 6);
+    CHECK(mapped[6].valueC == 8);
+    CHECK(mapped[7].valueC == 9);
+    CHECK(mapped[8].valueC == 10);
+    CHECK(mapped[11].valueC == 13);
 }
 
 void testCurveValidationAndHysteresis()
@@ -868,6 +928,7 @@ void testRepeatedSuspectEscalation()
 int main()
 {
     testEventInterfaceContract();
+    testDisplayReadPolicyVariantsAndMapping();
     testControllerEmitsSafetyEventsOnce();
     testShutdownRestoreEventIsProposalNotProof();
     testCurveValidationAndHysteresis();
