@@ -92,6 +92,10 @@ void Controller::reset() noexcept
     failsafeAckTimeMs_ = 0;
     failsafeCooldownStartMs_ = 0;
     consecutiveSuspectSamples_ = 0;
+    hasReportedMaximumTemperature_ = false;
+    reportedMaximumTemperatureC_ = 0;
+    hasReportedSafetyState_ = false;
+    reportedSafetyState_ = SafetyState::MonitorOnly;
 }
 
 ControllerOutput Controller::makeBaseOutput(
@@ -197,6 +201,71 @@ ControllerOutput Controller::update(const ControllerInput& input)
         input.nowMs,
         config_.sensor);
     ControllerOutput output = makeBaseOutput(input, temperature);
+    const auto finish = [&]() {
+        const bool stoppingTransition = !hasReportedSafetyState_ ||
+            reportedSafetyState_ != SafetyState::Stopping;
+        if (temperature.valid && (!hasReportedMaximumTemperature_ ||
+            temperature.valueC > reportedMaximumTemperatureC_)) {
+            CoreEvent event;
+            event.timestampMs = input.nowMs;
+            event.code = EventCode::MaximumTemperatureObserved;
+            event.severity = EventSeverity::Notice;
+            event.hasValue = true;
+            event.value = temperature.valueC;
+            output.events.push(event);
+            hasReportedMaximumTemperature_ = true;
+            reportedMaximumTemperatureC_ = temperature.valueC;
+        }
+        if (!hasReportedSafetyState_ || output.safetyState != reportedSafetyState_) {
+            if (output.safetyState == SafetyState::FailsafeBios) {
+                CoreEvent event;
+                event.timestampMs = input.nowMs;
+                event.code = EventCode::FailsafeEntered;
+                event.severity = EventSeverity::Critical;
+                event.hasValue = true;
+                event.value = static_cast<std::int32_t>(
+                    input.backendFailure ? EventCause::BackendFailure :
+                    input.writeFailure ? EventCause::WriteFailure :
+                    input.readbackMismatch ? EventCause::ReadbackMismatch :
+                    input.fanResponseFailed ? EventCause::FanResponseFailure :
+                    output.reasonCode == "repeated_suspect_fan" ? EventCause::RepeatedSuspectFan :
+                    output.reasonCode == "temperature_invalid" ? EventCause::InvalidTemperature :
+                    output.reasonCode == "manual_level_invalid" ? EventCause::InvalidManualLevel :
+                    EventCause::HardwareIneligible);
+                output.events.push(event);
+            } else if (output.safetyState == SafetyState::ThermalEmergency) {
+                CoreEvent event;
+                event.timestampMs = input.nowMs;
+                event.code = EventCode::ThermalEmergency;
+                event.severity = EventSeverity::Critical;
+                event.hasValue = temperature.valid;
+                event.value = temperature.valueC;
+                output.events.push(event);
+            }
+            reportedSafetyState_ = output.safetyState;
+            hasReportedSafetyState_ = true;
+        }
+        if (output.commandChanged && output.commandMayBeIssued) {
+            CoreEvent event;
+            event.timestampMs = input.nowMs;
+            event.code = EventCode::FanCommand;
+            event.severity = EventSeverity::Info;
+            event.hasValue = true;
+            event.value = static_cast<std::int32_t>(output.command.kind);
+            event.detail = output.command.level;
+            output.events.push(event);
+        }
+        if (input.shutdown && stoppingTransition) {
+            CoreEvent event;
+            event.timestampMs = input.nowMs;
+            event.code = EventCode::ShutdownRestore;
+            event.severity = output.commandMayBeIssued ? EventSeverity::Notice : EventSeverity::Error;
+            event.hasValue = output.commandMayBeIssued;
+            event.value = static_cast<std::int32_t>(output.command.kind);
+            output.events.push(event);
+        }
+        return output;
+    };
 
     if (input.requestBiosAutomatic || input.cancelManual) {
         controlRequested_ = false;
@@ -226,7 +295,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
         }
         output.fanHealth = evaluateFanHealth(input, output.command);
         lastCommand_ = output.command;
-        return output;
+        return finish();
     }
 
     if (!curve_.validation().valid) {
@@ -236,7 +305,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
         output.reasonCode = "invalid_curve";
         setCommand(output, FanCommand::none());
         lastCommand_ = output.command;
-        return output;
+        return finish();
     }
 
     if (input.backendFailure || input.writeFailure || input.readbackMismatch || input.fanResponseFailed) {
@@ -248,7 +317,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
         output.fanHealth = input.fanResponseFailed ? FanHealth::Failed :
                            evaluateFanHealth(input, output.command);
         lastCommand_ = output.command;
-        return output;
+        return finish();
     }
 
     if (!input.capabilities.controlEligible()) {
@@ -267,7 +336,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
         }
         output.fanHealth = evaluateFanHealth(input, output.command);
         lastCommand_ = output.command;
-        return output;
+        return finish();
     }
 
     if (safetyLatched_) {
@@ -313,7 +382,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
                         }
                         output.fanHealth = evaluateFanHealth(input, output.command);
                         lastCommand_ = output.command;
-                        return output;
+                        return finish();
                     }
                 } else {
                     output.safetyState = state_;
@@ -332,7 +401,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
                     }
                     output.fanHealth = evaluateFanHealth(input, output.command);
                     lastCommand_ = output.command;
-                    return output;
+                    return finish();
                 }
             } else {
                 // Acked but no valid temp yet, reset cooldown start.
@@ -353,7 +422,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
                 }
                 output.fanHealth = evaluateFanHealth(input, output.command);
                 lastCommand_ = output.command;
-                return output;
+                return finish();
             }
         }
 
@@ -377,7 +446,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
             }
             output.fanHealth = evaluateFanHealth(input, output.command);
             lastCommand_ = output.command;
-            return output;
+            return finish();
         }
         // Latch cleared, continue to normal handling below.
     }
@@ -399,7 +468,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
         setCommand(output, FanCommand::biosAutomatic());
         output.fanHealth = evaluateFanHealth(input, output.command);
         lastCommand_ = output.command;
-        return output;
+        return finish();
     }
 
     if (!temperature.valid) {
@@ -419,7 +488,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
         }
         output.fanHealth = evaluateFanHealth(input, output.command);
         lastCommand_ = output.command;
-        return output;
+        return finish();
     }
 
     const bool emergency = config_.emergencyTemperatureC > 0 &&
@@ -443,7 +512,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
         setCommand(output, decision.command);
         output.fanHealth = evaluateFanHealth(input, output.command);
         lastCommand_ = output.command;
-        return output;
+        return finish();
     }
 
     // T2-01 / ADR-030: sensor agreement - consecutive valid samples must agree.
@@ -474,7 +543,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
             setCommand(output, FanCommand::none());
             output.fanHealth = evaluateFanHealth(input, output.command);
             lastCommand_ = output.command;
-            return output;
+            return finish();
         }
     }
 
@@ -487,7 +556,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
         setCommand(output, FanCommand::none());
         output.fanHealth = evaluateFanHealth(input, output.command);
         lastCommand_ = output.command;
-        return output;
+        return finish();
     }
 
     if (manualActive_ && input.nowMs >= manualExpiresAtMs_) {
@@ -506,7 +575,7 @@ ControllerOutput Controller::update(const ControllerInput& input)
             enterFailsafe(output, input, "manual_level_invalid");
             output.fanHealth = evaluateFanHealth(input, output.command);
             lastCommand_ = output.command;
-            return output;
+            return finish();
         }
 
         manualActive_ = true;
@@ -540,10 +609,10 @@ ControllerOutput Controller::update(const ControllerInput& input)
         enterFailsafe(output, input, "repeated_suspect_fan");
         output.fanHealth = FanHealth::Failed;
         lastCommand_ = output.command;
-        return output;
+        return finish();
     }
     lastCommand_ = output.command;
-    return output;
+    return finish();
 }
 
 } // namespace core

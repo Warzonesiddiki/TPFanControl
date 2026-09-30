@@ -93,6 +93,77 @@ void testEventInterfaceContract()
     CHECK(sink.last.code == EventCode::FailsafeEntered);
     CHECK(sink.last.severity == EventSeverity::Critical);
     CHECK(sink.last.hasValue && sink.last.value == 42);
+
+    CoreEventBatch batch;
+    for (std::size_t i = 0; i < CoreEventBatch::Capacity; ++i) {
+        CHECK(batch.push(event));
+    }
+    CHECK(!batch.push(event));
+    CHECK(batch.count == CoreEventBatch::Capacity);
+    CHECK(batch.dropped == 1);
+}
+
+void testControllerEmitsSafetyEventsOnce()
+{
+    Controller controller(testControllerConfig());
+    ControllerInput input;
+    input.nowMs = 100;
+    input.capabilities = eligible();
+    input.temperatures = {temperature(60, 100)};
+    input.backendFailure = true;
+
+    ControllerOutput output = controller.update(input);
+    CHECK(output.safetyState == SafetyState::FailsafeBios);
+    bool sawPeak = false;
+    bool sawFailsafe = false;
+    bool sawRestoreCommand = false;
+    for (std::size_t i = 0; i < output.events.count; ++i) {
+        const CoreEvent& event = output.events.events[i];
+        CHECK(event.timestampMs == input.nowMs);
+        sawPeak = sawPeak || event.code == EventCode::MaximumTemperatureObserved;
+        sawFailsafe = sawFailsafe || (event.code == EventCode::FailsafeEntered &&
+            event.severity == EventSeverity::Critical && event.value ==
+            static_cast<std::int32_t>(EventCause::BackendFailure));
+        sawRestoreCommand = sawRestoreCommand || event.code == EventCode::FanCommand;
+    }
+    CHECK(sawPeak);
+    CHECK(sawFailsafe);
+    CHECK(sawRestoreCommand);
+    CHECK(output.events.count <= CoreEventBatch::Capacity);
+
+    input.nowMs = 200;
+    input.backendFailure = false;
+    output = controller.update(input);
+    for (std::size_t i = 0; i < output.events.count; ++i) {
+        CHECK(output.events.events[i].code != EventCode::FailsafeEntered);
+    }
+}
+
+void testShutdownRestoreEventIsProposalNotProof()
+{
+    Controller controller(testControllerConfig());
+    ControllerInput input;
+    input.nowMs = 10;
+    input.shutdown = true;
+    input.capabilities = eligible();
+    input.temperatures = {temperature(40, 10)};
+    ControllerOutput output = controller.update(input);
+    bool sawProposal = false;
+    for (std::size_t i = 0; i < output.events.count; ++i) {
+        const CoreEvent& event = output.events.events[i];
+        if (event.code == EventCode::ShutdownRestore) {
+            sawProposal = true;
+            CHECK(event.hasValue);
+            CHECK(event.severity == EventSeverity::Notice);
+        }
+    }
+    CHECK(sawProposal);
+
+    input.nowMs = 20;
+    output = controller.update(input);
+    for (std::size_t i = 0; i < output.events.count; ++i) {
+        CHECK(output.events.events[i].code != EventCode::ShutdownRestore);
+    }
 }
 
 void testCurveValidationAndHysteresis()
@@ -797,6 +868,8 @@ void testRepeatedSuspectEscalation()
 int main()
 {
     testEventInterfaceContract();
+    testControllerEmitsSafetyEventsOnce();
+    testShutdownRestoreEventIsProposalNotProof();
     testCurveValidationAndHysteresis();
     testSensorValidation();
     testDefaultDoesNotStartControl();

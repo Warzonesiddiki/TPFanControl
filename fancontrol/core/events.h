@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace tpfancontrol {
@@ -15,7 +17,20 @@ enum class EventCode : std::uint16_t {
     FailsafeEntered,
     MaximumTemperatureObserved,
     ShutdownRestore,
-    ConfigurationValidation
+    ConfigurationValidation,
+    ThermalEmergency
+};
+
+enum class EventCause : std::int32_t {
+    None,
+    BackendFailure,
+    WriteFailure,
+    ReadbackMismatch,
+    FanResponseFailure,
+    HardwareIneligible,
+    InvalidTemperature,
+    InvalidManualLevel,
+    RepeatedSuspectFan
 };
 
 enum class EventSeverity : std::uint8_t {
@@ -45,6 +60,26 @@ struct CoreEvent {
 // false means the event was dropped because the sink could not accept it;
 // producers must not retry synchronously or change a control decision based
 // on logging pressure. Concrete sinks own and expose their dropped-event count.
+// Bounded per-update event output. Four slots cover the maximum simultaneous
+// controller observations (new temperature peak, state transition, command,
+// and shutdown result); overflow is explicitly counted rather than allocating.
+struct CoreEventBatch {
+    static constexpr std::size_t Capacity = 4;
+    std::array<CoreEvent, Capacity> events{};
+    std::size_t count = 0;
+    std::size_t dropped = 0;
+
+    bool push(const CoreEvent& event) noexcept
+    {
+        if (count == Capacity) {
+            ++dropped;
+            return false;
+        }
+        events[count++] = event;
+        return true;
+    }
+};
+
 class IEventSink {
 public:
     virtual ~IEventSink() = default;

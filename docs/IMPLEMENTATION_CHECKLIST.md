@@ -21,7 +21,7 @@ Legend:
 | Measure | Value |
 |---|---|
 | Documented safety gaps closed | 9 of 10 (gaps 1, 2, 3, 4, 5, 6, 7, 8, 9-escalation) — gap 9 stuck-set and gap 10 logging remain open |
-| Portable-core test functions | 17 core + 42 EC + 35 bridge + 29 ecdiag + 38 policy + 16 backend + 19 TVicPort = 196, plus self-tests for the six checkers (`check_ecdiag_readonly.py`, `check_project_sources.py`, `check_ci_steps.py`, `check_legacy_ec_selftest.py`, `check_core_bootstrap.py`, `check_dependencies.py`) |
+| Portable-core test functions | 19 core + 42 EC + 35 bridge + 29 ecdiag + 38 policy + 16 backend + 19 TVicPort = 198, plus self-tests for the six checkers (`check_ecdiag_readonly.py`, `check_project_sources.py`, `check_ci_steps.py`, `check_legacy_ec_selftest.py`, `check_core_bootstrap.py`, `check_dependencies.py`) |
 | Work packages complete | 1 of 10 (T0); T1 in progress — 2 of 12 verified locally, 10 awaiting a Windows CI run. T5: 01, 04, 05, 06, 07, 08, 09, 10, 11 complete, 02 blocked, 03 gated on it. T3: 11 of 12 complete, T3-02 in progress (the display read path). T2: 01, 02, 03, 04, 06, 07, 08, 09, 10, 11, 12, 13, 14 complete; 05 open |
 | Critical path | T0 → T1 → T5 → T3 → T4 → T6 → T8 |
 | Biggest single risk | The startup path cannot be executed here. T5-04 found that the core *was* disconnected — `CoreInit()` had no caller and `CoreBridge` was always null — and fixed it by wiring `StartCore()` into `approot.cpp`; the risk that remains is that the wiring is a static property, checked by `check_core_bootstrap.py`, not a build: no MSVC, no Windows, no run. The first evidence that the application starts the core will come from T1-11. |
@@ -89,7 +89,7 @@ are verified locally. Tasks are promoted to `[x]` only when a CI run supplies ev
 | T2-02 | Decide what happens when one sensor source is lost while others remain | `[x]` | Done, ADR-030. Policy: aggregate is max over valid sources (`hottestValidTemperature`); if one source invalid, others continue. If all invalid, failsafe. No automatic degradation to monitor-only on single loss, because that would fail open when other sensors report high temp. Test `testSingleSourceLossContinuesOnOthers`. |
 | T2-03 | Failsafe cooldown and acknowledgement recovery so a latch does not require a process restart (§13 gap 7) | `[x]` | Done, ADR-030. Latch persists until explicit ack (`requestBiosAutomatic`/`cancelManual`) + cooldown `failsafeCooldownMs` (default 30s, candidate) of continuous valid readings + fresh control request (`requestControl`/`requestManual`). `controller.reset()` also clears. States `safety_latched_cooldown`, `safety_latched_cooldown_done_awaiting_request`, `safety_latched_awaiting_valid`. Test `testFailsafeLatchRequiresAckAndCooldown`. |
 | T2-04 | Repeated-suspect-sample escalation for fan health (§13 gap 9) | `[x]` | Done, ADR-030. `ControllerConfig::suspectThreshold` (default 3, candidate). `evaluateFanHealth` now non-const, tracks `consecutiveSuspectSamples_`; after threshold, returns `Failed` and `update` enters failsafe `repeated_suspect_fan`. Test `testRepeatedSuspectEscalation`. |
-| T2-05 | Structured event output in the portable core (§13 gap 10) | `[ ]` | See T2-13 |
+| T2-05 | Structured event output in the portable core (§13 gap 10) | `[x]` | `ControllerOutput::events` is a four-entry fixed-capacity batch. Emits peak temperature, failsafe/emergency transitions, changed command proposals and shutdown restore availability; event overflow is counted. `testControllerEmitsSafetyEventsOnce` and `testShutdownRestoreEventIsProposalNotProof` verify structured codes, cause, timestamps, command and shutdown proposals, and no duplicate transitions; `testEventInterfaceContract` pins capacity and overflow counting. No claim that command proposals were issued/read back; the remaining §11 logging gap stays open. ADR-031. |
 | T2-06 | Test: oscillation cannot pump the fan (the 10→70→20→75→40 °C case) | `[x]` | `testOscillationDoesNotPumpFan`: sequence 10→70→20→75→40 stays `Validating`, no command issued, because consecutive-difference >10°C fails agreement and resets. |
 | T2-07 | Test: a single-source loss degrades to monitor-only rather than continuing on partial data | `[x]` | Policy decided as continue on remaining sources (ADR-030), not degrade to monitor-only. Test `testSingleSourceLossContinuesOnOthers` pins that one invalid source does not make aggregate invalid; all invalid does. The old title assumed degrade, but degrading on single loss would fail open when other sensors report high temp. Documented as policy. |
 | T2-08 | Test: failsafe latch survives a latch-and-clear attempt without acknowledgement | `[x]` | `testFailsafeLatchRequiresAckAndCooldown`: latch survives clear without ack (`safety_latched`), survives ack without cooldown (`safety_latched_cooldown`), survives cooldown without re-request (`safety_latched_cooldown_done_awaiting_request`), clears only after ack+cooldown+re-request. |
@@ -390,7 +390,7 @@ is recorded as awaiting CI evidence rather than as done.
 | T7-04 | Display requested command versus measured RPM | `[ ]` | |
 | T7-05 | Display a truthful restore status: commanded vs unavailable | `[x]` | `ControlMode::RestoreUnavailable` exists in the core |
 | T7-06 | Add an explicit Return to BIOS/automatic action | `[ ]` | |
-| T7-07 | Add bounded status/event telemetry | `[ ]` | Blocked on T2-13 |
+| T7-07 | Add bounded status/event telemetry | `[ ]` | T2-13 contract defined; requires an adapter/sink and UI integration. |
 | T7-08 | Add rotating logs that never enter the source tree | `[ ]` | [BUILD.md](BUILD.md) §7 |
 | T7-09 | Add bounded CSV telemetry | `[ ]` | |
 | T7-10 | Add a sanitised diagnostic export | `[ ]` | Must redact paths and serials |
@@ -493,7 +493,7 @@ passing portable test.
 | 7 | §6.3 cooldown/acknowledgement recovery | **Closed** — latch requires explicit ack + 30s cooldown of valid readings + fresh control request (ADR-030, `failsafeCooldownMs`). `reset()` also clears. Tests `testFailsafeLatchRequiresAckAndCooldown`. |
 | 8 | [PROFILES.md](PROFILES.md) §4 curve rules | **Closed** — minimum point count and first-point ceiling |
 | 9 | §6.1 impossible RPM or tachometer behaviour → `Failed` | **Closed for escalation, open for stuck-set** — T5-08 closed implausible/sentinel/stale. T2-04 closes repeated-suspect escalation: 3 consecutive Suspect → Failed → failsafe `repeated_suspect_fan` (ADR-030, `suspectThreshold`). **Remaining open:** uniformly stuck sensor set undetectable from single stream (documented limitation, `testStuckTemperatureSource`). |
-| 10 | §11 log each fan command and readback result | **Open** — the portable core has no logging. Blocked on T2-13 |
+| 10 | §11 log each fan command and readback result | **Open** — core emits decision/proposal events, but adapter write/readback results and persistent logging remain unimplemented. |
 
 Six of ten are closed, and all six were hardware-independent. Gaps 6, 7 and 9 are
 policy questions rather than defects with an obvious correct answer.

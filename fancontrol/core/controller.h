@@ -1,5 +1,6 @@
 #pragma once
 
+#include "events.h"
 #include "fan_curve.h"
 #include "sensor_validation.h"
 
@@ -86,6 +87,7 @@ struct ControllerInput {
 };
 
 struct ControllerOutput {
+    CoreEventBatch events;
     SafetyState safetyState = SafetyState::MonitorOnly;
     ControlMode controlMode = ControlMode::MonitorOnly;
     FanCommand command = FanCommand::none();
@@ -156,6 +158,12 @@ private:
 
     // T2-04 / ADR-030. Consecutive suspect fan-health samples.
     std::uint32_t consecutiveSuspectSamples_ = 0;
+
+    // Event state is diagnostic only and never participates in control gates.
+    bool hasReportedMaximumTemperature_ = false;
+    int reportedMaximumTemperatureC_ = 0;
+    bool hasReportedSafetyState_ = false;
+    SafetyState reportedSafetyState_ = SafetyState::MonitorOnly;
 
     ControllerOutput makeBaseOutput(
         const ControllerInput& input,

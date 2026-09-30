@@ -1,4 +1,4 @@
-# Observability, telemetry, and fan health
+﻿# Observability, telemetry, and fan health
 
 The application must explain its decisions without requiring raw EC knowledge. Observability is local-first, bounded, and privacy-aware.
 
@@ -38,7 +38,9 @@ Use structured events with a timestamp, event code, severity, and redacted conte
 
 Event text is for humans; event codes are for tests and support tooling.
 
-The portable event contract is `fancontrol/core/events.h` (ADR-031). Events are fixed-size typed values with monotonic timestamps; they contain no free-form strings, user identity, paths, raw EC bytes, or wall-clock time. The core sends them through `IEventSink::tryEmit`, which adapters must implement with bounded capacity, non-blocking behavior, and no exceptions. A rejected event is dropped and counted by the sink; producers do not retry, and log pressure must never change control behavior. Formatting and persistence are adapter responsibilities. This contract does not claim that a sink or event emission is implemented.
+The portable event contract is `fancontrol/core/events.h` (ADR-031). Events are fixed-size typed values with monotonic timestamps; they contain no free-form strings, user identity, paths, raw EC bytes, or wall-clock time. `ControllerOutput::events` is a fixed-capacity batch (four entries); it reports newly observed temperature peaks, failsafe/emergency transitions, changed command proposals, and shutdown restore availability. Overflow is counted in the batch and cannot alter a control decision. `FanCommand.value` is the `CommandKind` and `.detail` the level (`-1` when not a level); `FailsafeEntered.value` is an `EventCause`; temperature events use Celsius in `.value`. For `ShutdownRestore`, `hasValue` means the controller can propose a restore command, not that the adapter issued it or that BIOS mode was verified. Backend initialization, profile activation, actual write/readback outcomes, and configuration validation are not emitted by the controller.
+
+Adapters may forward events through `IEventSink::tryEmit`, which must be bounded-capacity, non-blocking, and `noexcept`. A rejected event is dropped and counted by the sink; producers do not retry, and log pressure must never change control behavior. Formatting and persistence are adapter responsibilities. The interface alone does not constitute a persistent log or hardware evidence.
 
 ## 3. Log policy
 

@@ -1,4 +1,4 @@
-# Architecture decision records
+﻿# Architecture decision records
 
 This file records decisions that constrain implementation. New decisions should use [templates/ADR.md](templates/ADR.md).
 
@@ -1326,12 +1326,17 @@ event emission is claimed by this decision; these are T2-05 and later adapter
 work.
 
 **Consequences.** The interface can be implemented and tested portably, while
-storage and presentation remain replaceable. The fixed-size contract bounds
-per-event memory but does not itself provide a bounded queue; every sink must
-supply that bound and report drops. A dropped event is not proof that an event
-did not occur, and logs are not an authoritative audit trail.
+storage and presentation remain replaceable. Controller output uses a fixed
+four-event batch and counts overflow; a sink must separately provide a bounded
+queue and report drops. A dropped event is not proof that an event did not
+occur, and logs are not an authoritative audit trail. Controller events are
+decision/proposal records: a command event is not proof of an EC write, and a
+shutdown restore proposal is not proof that BIOS automatic mode was restored.
 
-**Evidence.** The interface is declared in `fancontrol/core/events.h` and the
-privacy, non-blocking, overflow, and ownership rules are recorded here and in
-`docs/OBSERVABILITY.md`. No Windows, persistence, or hardware verification is
-claimed.
+**Evidence.** `fancontrol/core/events.h` defines the types and bounded batch;
+`ControllerOutput::events` emits newly observed maximum temperature, failsafe
+and emergency transitions, changed command proposals, and shutdown restore
+availability. `testEventInterfaceContract` and
+`testControllerEmitsSafetyEventsOnce` cover the API and transition behavior.
+Backend/profile/configuration events and actual write/readback outcomes remain
+unimplemented. No Windows, persistence, or hardware verification is claimed.
